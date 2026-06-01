@@ -5,6 +5,7 @@ export interface RawProviderResponse {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  cachedTokens?: number;           // provider-native cache read tokens (Anthropic)
   toolCalls?: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
   rawResponse?: unknown;
 }

@@ -2,7 +2,7 @@
   "name": "@tthbfo2/llm-cost-trimmer",
   "version": "0.1.0",
   "type": "module",
-  "description": "The thing you install before your AI costs spiral. Zero-config LLM cost optimization — semantic caching, agentic plan caching, prompt compression, and full cost observability. No extra AI calls. Cross-provider.",
+  "description": "The thing you install before your AI costs spiral. Drop-in LLM cost attribution + optimization middleware. See exactly where your AI money goes — system prompts, tool schemas, RAG chunks, history. No prompt content stored. No extra AI calls.",
   "main": "dist/index.js",
   "module": "dist/index.esm.js",
   "types": "dist/index.d.ts",
@@ -18,9 +18,13 @@
     "dist/**/*.js",
     "dist/**/*.d.ts",
     "!dist/**/*.map",
+    "bin/trimwares.js",
     "README.md",
     "LICENSE"
   ],
+  "bin": {
+    "trimwares": "./bin/trimwares.js"
+  },
   "scripts": {
     "build": "tsc && rollup -c",
     "dev": "tsc --watch",

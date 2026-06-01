@@ -1,3 +1,59 @@
+// ─── Token Attribution ────────────────────────────────────────────────────────
+
+export interface TokenCategory {
+  tokens: number;
+  estimatedCost: number;
+  percentOfTotal: number;
+}
+
+export interface AttributionBreakdown {
+  systemPrompt: TokenCategory;
+  toolSchemas: TokenCategory;
+  ragChunks: TokenCategory;
+  conversationHistory: TokenCategory;
+  userQuery: TokenCategory;
+  outputTokens: TokenCategory;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCost: number;
+}
+
+export interface AttributedRequest {
+  attribution: AttributionBreakdown;
+  cacheableTokens: number;        // tokens that can be provider-cached
+  cacheableCostSaving: number;    // estimated savings if cached (90% of cacheable cost)
+}
+
+// ─── Provider-Native Cache ────────────────────────────────────────────────────
+
+export interface AnthropicSystemBlock {
+  type: 'text';
+  text: string;
+  cache_control?: { type: 'ephemeral' };
+}
+
+export interface CacheOptimizationResult {
+  messages: LLMMessage[];
+  tools?: LLMTool[];
+  anthropicSystemBlocks?: AnthropicSystemBlock[];  // replaces system string for Anthropic
+  cacheableTokens: number;
+  provider: ProviderName;
+}
+
+// ─── Session Log Entry (metadata only — no prompt content ever) ───────────────
+
+export interface SessionLogEntry {
+  timestamp: number;
+  requestId: string;
+  provider: ProviderName;
+  model: string;
+  attribution: AttributionBreakdown;
+  cached: boolean;
+  cacheType: string;
+  latencyMs: number;
+  nativeCache: boolean;          // whether provider-native caching was applied
+}
+
 // ─── Provider ─────────────────────────────────────────────────────────────────
 
 export type ProviderName = 'openai' | 'anthropic' | 'gemini' | 'groq' | 'ollama' | 'custom';
