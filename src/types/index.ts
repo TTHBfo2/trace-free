@@ -1,0 +1,203 @@
+// ─── Provider ─────────────────────────────────────────────────────────────────
+
+export type ProviderName = 'openai' | 'anthropic' | 'gemini' | 'groq' | 'ollama' | 'custom';
+
+// ─── Messages & Requests ──────────────────────────────────────────────────────
+
+export interface LLMMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string;
+  name?: string;
+  toolCallId?: string;
+}
+
+export interface LLMTool {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+}
+
+export interface LLMToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface LLMRequest {
+  messages: LLMMessage[];
+  model?: string;
+  maxTokens?: number;
+  temperature?: number;
+  tools?: LLMTool[];
+  agentPlanId?: string;
+  metadata?: Record<string, unknown>;
+}
+
+// ─── Responses ────────────────────────────────────────────────────────────────
+
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cachedTokens: number;
+  totalTokens: number;
+}
+
+export type CacheType = 'response' | 'semantic' | 'plan' | 'none';
+
+export interface LLMResponse {
+  content: string;
+  model: string;
+  provider: ProviderName;
+  usage: TokenUsage;
+  cost: number;
+  savings: number;
+  cached: boolean;
+  cacheType: CacheType;
+  requestId: string;
+  latencyMs: number;
+  toolCalls?: LLMToolCall[];
+}
+
+// ─── Cost Tracking ────────────────────────────────────────────────────────────
+
+export type WasteFlag =
+  | 'redundant_request'
+  | 'stale_context'
+  | 'oversized_context'
+  | 'premium_for_simple'
+  | 'missed_cache_hit';
+
+export interface CostEntry {
+  timestamp: number;
+  requestId: string;
+  provider: ProviderName;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cost: number;
+  savings: number;
+  cached: boolean;
+  cacheType: CacheType;
+  wasteFlags: WasteFlag[];
+  latencyMs: number;
+}
+
+export interface ModelPricing {
+  inputPerMillion: number;
+  outputPerMillion: number;
+  cachedInputPerMillion?: number;
+}
+
+export interface ProviderCostSummary {
+  totalCost: number;
+  totalSavings: number;
+  requestCount: number;
+  cachedCount: number;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+export interface ModelCostSummary extends ProviderCostSummary {
+  provider: ProviderName;
+}
+
+// ─── Reports ──────────────────────────────────────────────────────────────────
+
+export interface CostReport {
+  totalCost: number;
+  totalSavings: number;
+  savingsPercent: number;
+  totalRequests: number;
+  cachedRequests: number;
+  cacheHitRate: number;
+  byProvider: Record<string, ProviderCostSummary>;
+  byModel: Record<string, ModelCostSummary>;
+  timeRange: { start: number; end: number };
+  generatedAt: number;
+  dashboardHint?: string;
+}
+
+export interface WasteSummaryByType {
+  count: number;
+  estimatedCost: number;
+  examples: string[];
+}
+
+export interface WasteEntry {
+  requestId: string;
+  timestamp: number;
+  flags: WasteFlag[];
+  estimatedWaste: number;
+  model: string;
+  provider: ProviderName;
+}
+
+export interface WasteReport {
+  totalWaste: number;
+  totalRequests: number;
+  wastePercent: number;
+  byType: Partial<Record<WasteFlag, WasteSummaryByType>>;
+  topWasteDrivers: WasteEntry[];
+  recommendations: string[];
+  timeRange: { start: number; end: number };
+  generatedAt: number;
+}
+
+// ─── Agentic Plan Cache ───────────────────────────────────────────────────────
+
+export interface AgentStep {
+  stepIndex: number;
+  toolName: string;
+  toolArgs: Record<string, unknown>;
+  reasoning?: string;
+}
+
+export interface AgentPlan {
+  planId: string;
+  taskHash: string;
+  steps: AgentStep[];
+  createdAt: number;
+  hitCount: number;
+  lastUsedAt: number;
+  provider: ProviderName;
+  model: string;
+  estimatedTokensSaved: number;
+}
+
+// ─── Cache Stats ──────────────────────────────────────────────────────────────
+
+export interface CacheStats {
+  totalEntries: number;
+  hitCount: number;
+  missCount: number;
+  hitRate: number;
+  sizeBytes: number;
+}
+
+// ─── Configuration ────────────────────────────────────────────────────────────
+
+export interface CacheLayerConfig {
+  enabled?: boolean;
+  ttlMs?: number;
+  maxEntries?: number;
+}
+
+export interface SemanticCacheConfig extends CacheLayerConfig {
+  similarityThreshold?: number;
+}
+
+export interface TrimmerConfig {
+  provider?: ProviderName;
+  defaultModel?: string;
+  cache?: {
+    response?: CacheLayerConfig;
+    semantic?: SemanticCacheConfig;
+    plan?: CacheLayerConfig;
+  };
+  optimization?: {
+    compressPrompts?: boolean;
+    pruneContext?: boolean;
+    routeToCheapestModel?: boolean;
+  };
+  pricing?: Partial<Record<string, ModelPricing>>;
+}

@@ -1,0 +1,13 @@
+src/
+tests/
+examples/
+coverage/
+*.log
+.env*
+.eslintrc.cjs
+jest.config.cjs
+jest.setup.cjs
+rollup.config.js
+tsconfig.json
+NOTES.md
+CHANGELOG.md
