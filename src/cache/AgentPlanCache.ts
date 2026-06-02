@@ -85,9 +85,9 @@ export class AgentPlanCache {
   }): AgentPlan {
     const steps: AgentStep[] = params.toolCalls.map((tc, i) => ({
       stepIndex: i,
-      toolName: tc.name,
-      toolArgs: tc.arguments,
-      reasoning: i === 0 ? params.reasoning : undefined,
+      toolName:  tc.name,
+      toolArgs:  tc.arguments,
+      ...(i === 0 && params.reasoning ? { reasoning: params.reasoning } : {}),
     }));
 
     return this.storePlan({

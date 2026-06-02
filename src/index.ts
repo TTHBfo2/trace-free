@@ -1,7 +1,7 @@
 import {
   TrimmerConfig, LLMRequest, LLMResponse,
   CostReport, WasteReport, ProviderName,
-  AgentPlan, AgentStep, AttributionBreakdown,
+  AgentPlan, AgentStep,
 } from './types/index.js';
 import { CostEngine, generateRequestId } from './core/CostEngine.js';
 import { ResponseCache } from './cache/ResponseCache.js';
@@ -37,157 +37,163 @@ export * from './types/index.js';
  *
  * const trimmer = new LLMCostTrimmer(new OpenAIProvider(new OpenAI()));
  * const response = await trimmer.chat({ messages: [{ role: 'user', content: 'Hello' }] });
- * trimmer.printReport();  // see exactly where your tokens went
+ * trimmer.printReport();
  * ```
  */
 export class LLMCostTrimmer {
   private provider: BaseProvider;
   private config: Required<TrimmerConfig>;
 
-  private responseCache: ResponseCache;
-  private semanticCache: SemanticCache;
-  private planCache: AgentPlanCache;
+  private responseCache:       ResponseCache;
+  private semanticCache:       SemanticCache;
+  private planCache:           AgentPlanCache;
   private nativeCacheOptimizer: PromptCacheOptimizer;
-  private costEngine: CostEngine;
-  private pruner: ContextPruner;
-  private router: ModelRouter;
-  private wasteReporter: WasteReporter;
-  private attributor: TokenAttributor;
-  private sessionLog: SessionLog;
+  private costEngine:          CostEngine;
+  private pruner:              ContextPruner;
+  private router:              ModelRouter;
+  private wasteReporter:       WasteReporter;
+  private attributor:          TokenAttributor;
+  private sessionLog:          SessionLog;
 
   constructor(provider: BaseProvider, config: TrimmerConfig = {}) {
     this.provider = provider;
 
+    // Build fully-resolved config with no undefined values
+    const responseCfg  = config.cache?.response  ?? {};
+    const semanticCfg  = config.cache?.semantic   ?? {};
+    const planCfg      = config.cache?.plan       ?? {};
+
     this.config = {
-      provider: config.provider ?? provider.name,
+      provider:     config.provider     ?? provider.name,
       defaultModel: config.defaultModel ?? provider.defaultModel,
       cache: {
-        response:  { enabled: true,  ttlMs: 5 * 60 * 1000,  maxEntries: 2_000, ...(config.cache?.response  ?? {}) },
-        semantic:  { enabled: true,  ttlMs: 10 * 60 * 1000, maxEntries: 500, similarityThreshold: 0.92, ...(config.cache?.semantic ?? {}) },
-        plan:      { enabled: true,  ttlMs: 30 * 60 * 1000, maxEntries: 200, ...(config.cache?.plan      ?? {}) },
+        response: { enabled: true,  ttlMs: responseCfg.ttlMs  ?? 5  * 60 * 1000, maxEntries: responseCfg.maxEntries ?? 2_000 },
+        semantic: { enabled: true,  ttlMs: semanticCfg.ttlMs  ?? 10 * 60 * 1000, maxEntries: semanticCfg.maxEntries ?? 500,
+                    similarityThreshold: (semanticCfg as { similarityThreshold?: number }).similarityThreshold ?? 0.92 },
+        plan:     { enabled: true,  ttlMs: planCfg.ttlMs      ?? 30 * 60 * 1000, maxEntries: planCfg.maxEntries     ?? 200 },
       },
       optimization: {
-        compressPrompts:      config.optimization?.compressPrompts      ?? false, // moved to v0.2
+        compressPrompts:      config.optimization?.compressPrompts      ?? false,
         pruneContext:         config.optimization?.pruneContext          ?? false,
         routeToCheapestModel: config.optimization?.routeToCheapestModel ?? false,
       },
       pricing: config.pricing ?? {},
     };
 
-    this.responseCache      = new ResponseCache({ ttlMs: this.config.cache.response.ttlMs, maxEntries: this.config.cache.response.maxEntries });
-    this.semanticCache      = new SemanticCache({ ttlMs: this.config.cache.semantic.ttlMs, maxEntries: this.config.cache.semantic.maxEntries, similarityThreshold: (this.config.cache.semantic as { similarityThreshold?: number }).similarityThreshold });
-    this.planCache          = new AgentPlanCache({ ttlMs: this.config.cache.plan.ttlMs, maxEntries: this.config.cache.plan.maxEntries });
+    const rc = this.config.cache.response as { ttlMs: number; maxEntries: number };
+    const sc = this.config.cache.semantic as { ttlMs: number; maxEntries: number; similarityThreshold: number };
+    const pc = this.config.cache.plan     as { ttlMs: number; maxEntries: number };
+
+    this.responseCache        = new ResponseCache({ ttlMs: rc.ttlMs, maxEntries: rc.maxEntries });
+    this.semanticCache        = new SemanticCache({ ttlMs: sc.ttlMs, maxEntries: sc.maxEntries, similarityThreshold: sc.similarityThreshold });
+    this.planCache            = new AgentPlanCache({ ttlMs: pc.ttlMs, maxEntries: pc.maxEntries });
     this.nativeCacheOptimizer = new PromptCacheOptimizer(this.config.provider);
-    this.costEngine         = new CostEngine(this.config.pricing, this.config.provider);
-    this.pruner             = new ContextPruner({ provider: this.config.provider as string });
-    this.router             = new ModelRouter();
-    this.wasteReporter      = new WasteReporter();
-    this.attributor         = new TokenAttributor(this.config.provider as string);
-    this.sessionLog         = new SessionLog();
+    this.costEngine           = new CostEngine(this.config.pricing, this.config.provider);
+    this.pruner               = new ContextPruner({ provider: this.config.provider as string });
+    this.router               = new ModelRouter();
+    this.wasteReporter        = new WasteReporter();
+    this.attributor           = new TokenAttributor(this.config.provider as string);
+    this.sessionLog           = new SessionLog();
   }
 
   // ─── Main API ──────────────────────────────────────────────────────────────
 
   async chat(request: LLMRequest): Promise<LLMResponse> {
-    let req = { ...request };
-    const model    = req.model ?? this.config.defaultModel;
-    const provider = this.config.provider;
-    const requestId = generateRequestId();
-    const startMs   = Date.now();
+    let req             = { ...request };
+    const model         = req.model ?? this.config.defaultModel;
+    const provider      = this.config.provider;
+    const requestId     = generateRequestId();
+    const startMs       = Date.now();
 
     // 1. Exact response cache
-    if (this.config.cache.response.enabled !== false) {
-      const cached = this.responseCache.get(req);
-      if (cached) {
-        const savings = cached.cost;
-        this.recordToLog(requestId, provider, cached.model, cached.usage.inputTokens, cached.usage.outputTokens, req, true, 'response', Date.now() - startMs, false);
-        return { ...cached, requestId, cached: true, cacheType: 'response', savings, cost: 0, latencyMs: Date.now() - startMs };
+    const responseCacheEnabled = (this.config.cache.response as { enabled?: boolean }).enabled !== false;
+    if (responseCacheEnabled) {
+      const hit = this.responseCache.get(req);
+      if (hit) {
+        const latencyMs = Date.now() - startMs;
+        this.costEngine.record({ requestId, provider, model: hit.model, inputTokens: hit.usage.inputTokens, outputTokens: hit.usage.outputTokens, cached: true, cacheType: 'response', latencyMs, request, savings: hit.cost });
+        this.recordToLog(requestId, provider, hit.model, hit.usage.inputTokens, hit.usage.outputTokens, req, true, 'response', latencyMs, false);
+        return { ...hit, requestId, cached: true, cacheType: 'response', savings: hit.cost, cost: 0, latencyMs };
       }
     }
 
     // 2. Semantic cache
-    if (this.config.cache.semantic.enabled !== false) {
-      const cached = this.semanticCache.get(req);
-      if (cached) {
-        const savings = cached.cost;
-        this.recordToLog(requestId, provider, cached.model, cached.usage.inputTokens, cached.usage.outputTokens, req, true, 'semantic', Date.now() - startMs, false);
-        return { ...cached, requestId, cached: true, cacheType: 'semantic', savings, cost: 0, latencyMs: Date.now() - startMs };
+    const semanticCacheEnabled = (this.config.cache.semantic as { enabled?: boolean }).enabled !== false;
+    if (semanticCacheEnabled) {
+      const hit = this.semanticCache.get(req);
+      if (hit) {
+        const latencyMs = Date.now() - startMs;
+        this.costEngine.record({ requestId, provider, model: hit.model, inputTokens: hit.usage.inputTokens, outputTokens: hit.usage.outputTokens, cached: true, cacheType: 'semantic', latencyMs, request, savings: hit.cost });
+        this.recordToLog(requestId, provider, hit.model, hit.usage.inputTokens, hit.usage.outputTokens, req, true, 'semantic', latencyMs, false);
+        return { ...hit, requestId, cached: true, cacheType: 'semantic', savings: hit.cost, cost: 0, latencyMs };
       }
     }
 
     // 3. Optional: context pruning
     if (this.config.optimization.pruneContext) {
-      const result = this.pruner.prune(req.messages);
-      req = { ...req, messages: result.messages };
+      req = { ...req, messages: this.pruner.prune(req.messages).messages };
     }
 
     // 4. Optional: model routing
-    let resolvedModel    = model;
+    let resolvedModel:    string       = model;
     let resolvedProvider: ProviderName = provider;
     if (this.config.optimization.routeToCheapestModel) {
-      const decision = this.router.route(req, model, provider);
-      resolvedModel    = decision.model;
+      const decision  = this.router.route(req, model, provider);
+      resolvedModel   = decision.model;
       resolvedProvider = decision.provider;
       req = { ...req, model: resolvedModel };
     }
 
-    // 5. Provider-native prompt caching (v0.1 headline feature)
-    const cacheOptResult = this.nativeCacheOptimizer.optimize(req, resolvedProvider);
-    const nativeCacheApplied = cacheOptResult.cacheableTokens > 0;
+    // 5. Provider-native prompt caching
+    const cacheOpt           = this.nativeCacheOptimizer.optimize(req, resolvedProvider);
+    const nativeCacheApplied = cacheOpt.cacheableTokens > 0;
+    const optimizedReq: LLMRequest = {
+      ...req,
+      messages: cacheOpt.messages,
+      ...(cacheOpt.tools ? { tools: cacheOpt.tools } : {}),
+    };
 
-    // 6. Live call — pass optimized request + Anthropic system blocks if applicable
+    // 6. Live call
     let raw;
-    if (resolvedProvider === 'anthropic' && cacheOptResult.anthropicSystemBlocks && this.provider instanceof AnthropicProvider) {
-      const optimizedReq = { ...req, messages: cacheOptResult.messages, tools: cacheOptResult.tools };
-      raw = await (this.provider as AnthropicProvider).send(optimizedReq, cacheOptResult.anthropicSystemBlocks);
+    if (resolvedProvider === 'anthropic' && cacheOpt.anthropicSystemBlocks && this.provider instanceof AnthropicProvider) {
+      raw = await (this.provider as AnthropicProvider).send(optimizedReq, cacheOpt.anthropicSystemBlocks);
     } else {
-      raw = await this.provider.send({ ...req, messages: cacheOptResult.messages, tools: cacheOptResult.tools });
+      raw = await this.provider.send(optimizedReq);
     }
 
     const latencyMs = Date.now() - startMs;
     const pricing   = this.costEngine.getPricing(raw.model);
     const cost      = this.costEngine.computeCost(raw.inputTokens, raw.outputTokens, pricing);
 
-    const response = this.provider.buildResponse(raw, requestId, latencyMs, cost, 0, false, 'none');
-    response.provider = resolvedProvider;
+    const response        = this.provider.buildResponse(raw, requestId, latencyMs, cost, 0, false, 'none');
+    response.provider     = resolvedProvider;
     response.usage.cachedTokens = raw.cachedTokens ?? 0;
 
     // 7. Store in caches
     this.responseCache.set(request, response);
     this.semanticCache.set(request, response);
 
-    // 8. Record cost entry
-    this.costEngine.record({
-      requestId, provider: resolvedProvider, model: raw.model,
-      inputTokens: raw.inputTokens, outputTokens: raw.outputTokens,
-      cached: false, cacheType: 'none', latencyMs, request, savings: 0,
-    });
+    // 8. Record cost
+    this.costEngine.record({ requestId, provider: resolvedProvider, model: raw.model, inputTokens: raw.inputTokens, outputTokens: raw.outputTokens, cached: false, cacheType: 'none', latencyMs, request, savings: 0 });
 
-    // 9. Log to session file (metadata only — no content)
+    // 9. Log session entry (metadata only)
     this.recordToLog(requestId, resolvedProvider, raw.model, raw.inputTokens, raw.outputTokens, request, false, 'none', latencyMs, nativeCacheApplied);
 
     return response;
   }
 
-  // ─── Reporting (v0.1 core) ─────────────────────────────────────────────────
+  // ─── Reporting ─────────────────────────────────────────────────────────────
 
-  getCostReport(): CostReport {
-    return this.costEngine.getCostReport();
-  }
+  getCostReport(): CostReport { return this.costEngine.getCostReport(); }
 
-  getWasteReport(): WasteReport {
-    return this.wasteReporter.buildReport(this.costEngine.getEntries());
-  }
+  getWasteReport(): WasteReport { return this.wasteReporter.buildReport(this.costEngine.getEntries()); }
 
-  /** Print the full attribution report to stdout. */
-  printReport(): void {
-    printReport({ entries: this.sessionLog.getBuffer() });
-  }
+  printReport(): void { printReport({ entries: this.sessionLog.getBuffer() }); }
 
   // ─── Agentic Plan Cache ────────────────────────────────────────────────────
 
   getPlan(taskDescription: string): AgentPlan | null {
-    if (this.config.cache.plan.enabled === false) return null;
+    if ((this.config.cache.plan as { enabled?: boolean }).enabled === false) return null;
     return this.planCache.getPlan(taskDescription);
   }
 
@@ -221,15 +227,12 @@ export class LLMCostTrimmer {
 
   private recordToLog(
     requestId: string, provider: ProviderName, model: string,
-    inputTokens: number, outputTokens: number,
+    _inputTokens: number, outputTokens: number,
     request: LLMRequest, cached: boolean, cacheType: string,
     latencyMs: number, nativeCache: boolean
   ): void {
     const pricing     = this.costEngine.getPricing(model);
     const attribution = this.attributor.attribute(request, outputTokens, pricing);
-    this.sessionLog.write({
-      timestamp: Date.now(), requestId, provider, model,
-      attribution, cached, cacheType, latencyMs, nativeCache,
-    });
+    this.sessionLog.write({ timestamp: Date.now(), requestId, provider, model, attribution, cached, cacheType, latencyMs, nativeCache });
   }
 }

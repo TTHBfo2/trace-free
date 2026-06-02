@@ -79,7 +79,7 @@ export class AnthropicProvider extends BaseProvider {
       inputTokens: (response.usage?.input_tokens ?? 0) + cacheWriteTokens,
       outputTokens: response.usage?.output_tokens ?? 0,
       cachedTokens: cacheReadTokens,
-      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      ...(toolCalls.length > 0 ? { toolCalls } : {}),
       rawResponse: response,
     };
   }

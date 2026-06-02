@@ -41,7 +41,7 @@ export abstract class BaseProvider {
       cacheType,
       requestId,
       latencyMs,
-      toolCalls: raw.toolCalls,
+      ...(raw.toolCalls ? { toolCalls: raw.toolCalls } : {}),
     };
   }
 }

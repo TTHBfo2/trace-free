@@ -1,4 +1,4 @@
-import { SessionLogEntry, AttributionBreakdown } from '../types/index.js';
+import { SessionLogEntry } from '../types/index.js';
 
 // Terminal color codes
 const C = {
@@ -18,7 +18,6 @@ function dim(s: string)    { return `${C.dim}${s}${C.reset}`; }
 function green(s: string)  { return `${C.green}${s}${C.reset}`; }
 function yellow(s: string) { return `${C.yellow}${s}${C.reset}`; }
 function cyan(s: string)   { return `${C.cyan}${s}${C.reset}`; }
-function red(s: string)    { return `${C.red}${s}${C.reset}`; }
 function gray(s: string)   { return `${C.gray}${s}${C.reset}`; }
 
 function bar(percent: number, width = 24): string {
@@ -56,7 +55,6 @@ export function renderReport(options: AnalyzeOptions): string {
 
   // ── Aggregate ──────────────────────────────────────────────────
   let totalCost = 0;
-  let totalSavings = 0;
   let totalRequests = 0;
   let cachedRequests = 0;
   let nativeCacheRequests = 0;
@@ -75,7 +73,7 @@ export function renderReport(options: AnalyzeOptions): string {
   const byModel: Record<string, { cost: number; requests: number }> = {};
 
   for (const e of entries) {
-    totalCost      += e.attribution.totalCost;
+    totalCost += e.attribution.totalCost;
     totalRequests++;
     if (e.cached)       cachedRequests++;
     if (e.nativeCache)  nativeCacheRequests++;

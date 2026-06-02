@@ -46,8 +46,12 @@ export class CostEngine {
     pricingOverrides: Partial<Record<string, ModelPricing>> = {},
     provider: ProviderName = 'openai'
   ) {
-    this.pricing = { ...DEFAULT_PRICING, ...pricingOverrides };
-    this.wasteDetector = new WasteDetector(provider);
+    const overrides = Object.fromEntries(
+      Object.entries(pricingOverrides).filter(([, v]) => v !== undefined)
+    ) as Record<string, ModelPricing>;
+    this.pricing = { ...DEFAULT_PRICING, ...overrides };
+    void provider; // provider stored in config; WasteDetector is provider-agnostic
+    this.wasteDetector = new WasteDetector();
   }
 
   record(params: {
@@ -95,12 +99,12 @@ export class CostEngine {
     const normalized = model.toLowerCase();
     if (this.pricing[normalized]) return this.pricing[normalized];
 
-    // Fuzzy match: find the first key that the model string contains
-    for (const [key, pricing] of Object.entries(this.pricing)) {
-      if (normalized.includes(key) || key.includes(normalized)) return pricing;
+    // Fuzzy match: sort keys longest-first so 'gpt-4o-mini' wins over 'gpt-4o'
+    const sortedKeys = Object.keys(this.pricing).sort((a, b) => b.length - a.length);
+    for (const key of sortedKeys) {
+      if (normalized.includes(key) || key.includes(normalized)) return this.pricing[key];
     }
 
-    // Unknown model: use gpt-4o as a safe default estimate
     return this.pricing['gpt-4o'] ?? { inputPerMillion: 2.50, outputPerMillion: 10.00 };
   }
 
