@@ -7,3 +7,6 @@ coverage/
 *.tgz
 .DS_Store
 .trimwares/
+
+tests/blackbox/node_modules/
+tests/blackbox/package-lock.json
