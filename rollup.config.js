@@ -24,11 +24,11 @@ export default [
     external: ['openai', '@anthropic-ai/sdk', '@google/generative-ai', 'crypto', 'zlib']
   },
 
-  // CJS build
+  // CJS build — .cjs extension required when package.json has "type": "module"
   {
     input: 'src/index.ts',
     output: {
-      file: 'dist/index.js',
+      file: 'dist/index.cjs',
       format: 'cjs',
       sourcemap: true,
       exports: 'named'

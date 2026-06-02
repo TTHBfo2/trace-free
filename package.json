@@ -3,19 +3,20 @@
   "version": "0.1.0",
   "type": "module",
   "description": "The thing you install before your AI costs spiral. Drop-in LLM cost attribution + optimization middleware. See exactly where your AI money goes — system prompts, tool schemas, RAG chunks, history. No prompt content stored. No extra AI calls.",
-  "main": "dist/index.js",
+  "main": "dist/index.cjs",
   "module": "dist/index.esm.js",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
       "import": "./dist/index.esm.js",
-      "require": "./dist/index.js",
+      "require": "./dist/index.cjs",
       "types": "./dist/index.d.ts"
     },
     "./package.json": "./package.json"
   },
   "files": [
     "dist/**/*.js",
+    "dist/**/*.cjs",
     "dist/**/*.d.ts",
     "!dist/**/*.map",
     "bin/trimwares.js",
@@ -82,15 +83,20 @@
     "jest": "^29.7.0",
     "rollup": "^4.54.0",
     "ts-jest": "^29.1.1",
+    "tslib": "^2.8.1",
     "typescript": "^5.9.3"
   },
   "peerDependencies": {
-    "openai": ">=4.0.0",
-    "@anthropic-ai/sdk": ">=0.20.0"
+    "@anthropic-ai/sdk": ">=0.20.0",
+    "openai": ">=4.0.0"
   },
   "peerDependenciesMeta": {
-    "openai": { "optional": true },
-    "@anthropic-ai/sdk": { "optional": true }
+    "openai": {
+      "optional": true
+    },
+    "@anthropic-ai/sdk": {
+      "optional": true
+    }
   },
   "engines": {
     "node": ">=18.0.0"
