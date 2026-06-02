@@ -253,7 +253,20 @@ export interface TrimmerConfig {
   optimization?: {
     compressPrompts?: boolean;
     pruneContext?: boolean;
+    /**
+     * Automatically route simple requests (< 400 tokens, no tools, no complex keywords)
+     * to the cheapest capable model on the same provider.
+     * Conservative: only routes when confident the request is simple.
+     * Default: true
+     */
     routeToCheapestModel?: boolean;
+    /**
+     * Filter tool schemas to only include tools relevant to the current agent step.
+     * Only activates when a request has ≥ 3 tools. Conservative: falls back to full
+     * schema if fewer than 2 tools match.
+     * Default: true
+     */
+    filterToolSchemas?: boolean;
   };
   pricing?: Partial<Record<string, ModelPricing>>;
 }

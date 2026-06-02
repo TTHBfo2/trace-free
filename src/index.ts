@@ -10,6 +10,7 @@ import { AgentPlanCache } from './cache/AgentPlanCache.js';
 import { PromptCacheOptimizer } from './cache/PromptCacheOptimizer.js';
 import { ContextPruner } from './optimization/ContextPruner.js';
 import { ModelRouter } from './optimization/ModelRouter.js';
+import { ToolSchemaFilter } from './optimization/ToolSchemaFilter.js';
 import { WasteReporter } from './reporting/WasteReport.js';
 import { TokenAttributor } from './attribution/TokenAttributor.js';
 import { SessionLog } from './telemetry/SessionLog.js';
@@ -51,6 +52,7 @@ export class LLMCostTrimmer {
   private costEngine:          CostEngine;
   private pruner:              ContextPruner;
   private router:              ModelRouter;
+  private toolFilter:          ToolSchemaFilter;
   private wasteReporter:       WasteReporter;
   private attributor:          TokenAttributor;
   private sessionLog:          SessionLog;
@@ -75,7 +77,8 @@ export class LLMCostTrimmer {
       optimization: {
         compressPrompts:      config.optimization?.compressPrompts      ?? false,
         pruneContext:         config.optimization?.pruneContext          ?? false,
-        routeToCheapestModel: config.optimization?.routeToCheapestModel ?? false,
+        routeToCheapestModel: config.optimization?.routeToCheapestModel ?? true,  // on by default — conservative classifier
+        filterToolSchemas:    config.optimization?.filterToolSchemas    ?? true,  // on by default — conservative fallback
       },
       pricing: config.pricing ?? {},
     };
@@ -91,6 +94,7 @@ export class LLMCostTrimmer {
     this.costEngine           = new CostEngine(this.config.pricing, this.config.provider);
     this.pruner               = new ContextPruner({ provider: this.config.provider as string });
     this.router               = new ModelRouter();
+    this.toolFilter           = new ToolSchemaFilter();
     this.wasteReporter        = new WasteReporter();
     this.attributor           = new TokenAttributor(this.config.provider as string);
     this.sessionLog           = new SessionLog();
@@ -134,17 +138,29 @@ export class LLMCostTrimmer {
       req = { ...req, messages: this.pruner.prune(req.messages).messages };
     }
 
-    // 4. Optional: model routing
-    let resolvedModel:    string       = model;
-    let resolvedProvider: ProviderName = provider;
-    if (this.config.optimization.routeToCheapestModel) {
-      const decision  = this.router.route(req, model, provider);
-      resolvedModel   = decision.model;
-      resolvedProvider = decision.provider;
-      req = { ...req, model: resolvedModel };
+    // 4. Tool schema filtering — only send tools relevant to the current step
+    //    Conservative: falls back to full schema if fewer than 2 tools match
+    const filterToolSchemas = (this.config.optimization as { filterToolSchemas?: boolean }).filterToolSchemas !== false;
+    if (filterToolSchemas && req.tools && req.tools.length >= 3) {
+      const filtered = this.toolFilter.filter(req.tools, req.messages);
+      if (filtered.tokensSaved > 0) {
+        req = { ...req, tools: filtered.tools };
+      }
     }
 
-    // 5. Provider-native prompt caching
+    // 5. Model routing — conservative, same-provider only
+    let resolvedModel:    string       = model;
+    let resolvedProvider: ProviderName = provider;
+    if ((this.config.optimization as { routeToCheapestModel?: boolean }).routeToCheapestModel !== false) {
+      const decision = this.router.route(req, model, provider);
+      if (decision.wasRouted) {
+        resolvedModel    = decision.model;
+        resolvedProvider = decision.provider;
+        req = { ...req, model: resolvedModel };
+      }
+    }
+
+    // 6. Provider-native prompt caching
     const cacheOpt           = this.nativeCacheOptimizer.optimize(req, resolvedProvider);
     const nativeCacheApplied = cacheOpt.cacheableTokens > 0;
     const optimizedReq: LLMRequest = {
@@ -153,7 +169,7 @@ export class LLMCostTrimmer {
       ...(cacheOpt.tools ? { tools: cacheOpt.tools } : {}),
     };
 
-    // 6. Live call
+    // 7. Live call
     let raw;
     if (resolvedProvider === 'anthropic' && cacheOpt.anthropicSystemBlocks && this.provider instanceof AnthropicProvider) {
       raw = await (this.provider as AnthropicProvider).send(optimizedReq, cacheOpt.anthropicSystemBlocks);
