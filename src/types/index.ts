@@ -254,10 +254,17 @@ export interface TrimmerConfig {
     compressPrompts?: boolean;
     pruneContext?: boolean;
     /**
+     * Rolling window: keep only the last N conversation turns (non-system messages).
+     * Simple and predictable — prevents O(N²) context cost growth in agent loops.
+     * Keeps system message + last N turns. Default: undefined (off).
+     * Recommended for agent workflows: maxHistoryTurns: 10
+     */
+    maxHistoryTurns?: number;
+    /**
      * Automatically route simple requests (< 400 tokens, no tools, no complex keywords)
      * to the cheapest capable model on the same provider.
      * Conservative: only routes when confident the request is simple.
-     * Default: true
+     * Default: false (opt-in — developer chose their model intentionally)
      */
     routeToCheapestModel?: boolean;
     /**

@@ -1,5 +1,6 @@
 import { TrimwareEngine, RawSdkResult } from './engine/TrimwareEngine.js';
-import { TrimmerConfig, LLMRequest, CostReport, WasteReport, ProviderName } from './types/index.js';
+import { TrimmerConfig, LLMRequest, CostReport, WasteReport, ProviderName, LLMResponse } from './types/index.js';
+import { generateRequestId } from './core/CostEngine.js';
 
 // ─── Reporting namespace attached to every wrapped client ─────────────────────
 
@@ -119,13 +120,13 @@ function wrapOpenAICompatible<T extends object>(
                 const request     = normalizeOpenAIParams(params);
 
                 if (isStreaming) {
-                  // Streaming: check cache, pass through on miss, cache on completion
-                  const cacheHit = engine.responseCache.get(request);
+                  const streamStart = Date.now();
+                  const cacheHit    = engine.responseCache.get(request);
                   if (cacheHit) {
-                    // Return a minimal fake stream that yields the cached content
+                    // Record cache hit BEFORE returning fake stream
+                    recordStreamingCacheHit(engine, request, cacheHit, streamStart);
                     return buildFakeOpenAIStream(extractCachedContent(cacheHit));
                   }
-                  // Cache miss: call through and intercept on completion
                   const stream = await (compValue as Function).call(compTarget, params) as AsyncIterable<unknown>;
                   return wrapOpenAIStream(stream, request, engine);
                 }
@@ -170,8 +171,12 @@ function wrapAnthropic<T extends object>(client: T, config?: TrimmerConfig): Wra
             const request     = normalizeAnthropicParams(params);
 
             if (isStreaming) {
-              const cacheHit = engine.responseCache.get(request);
-              if (cacheHit) return buildFakeAnthropicStream(extractCachedContent(cacheHit));
+              const streamStart = Date.now();
+              const cacheHit    = engine.responseCache.get(request);
+              if (cacheHit) {
+                recordStreamingCacheHit(engine, request, cacheHit, streamStart);
+                return buildFakeAnthropicStream(extractCachedContent(cacheHit));
+              }
               const stream = await (msgValue as Function).call(msgTarget, params) as AsyncIterable<unknown>;
               return wrapAnthropicStream(stream, request, engine);
             }
@@ -449,8 +454,29 @@ function denormalizeAnthropicParams(
   return result;
 }
 
-function extractCachedContent(cached: import('./types/index.js').LLMResponse): string {
+function extractCachedContent(cached: LLMResponse): string {
   return cached.content ?? '';
+}
+
+/** Record a streaming cache hit in the cost engine and session log. */
+function recordStreamingCacheHit(
+  engine: TrimwareEngine,
+  request: LLMRequest,
+  cacheHit: LLMResponse,
+  startMs: number,
+): void {
+  const requestId = generateRequestId();
+  const latencyMs = Date.now() - startMs;
+  engine.costEngine.record({
+    requestId, provider: engine.provider, model: cacheHit.model,
+    inputTokens: cacheHit.usage.inputTokens, outputTokens: cacheHit.usage.outputTokens,
+    cached: true, cacheType: 'response', latencyMs, request, savings: cacheHit.cost,
+  });
+  engine.sessionLog.write({
+    timestamp: Date.now(), requestId, provider: engine.provider, model: cacheHit.model,
+    attribution: engine.attributor.attribute(request, cacheHit.usage.outputTokens, engine.costEngine.getPricing(cacheHit.model)),
+    cached: true, cacheType: 'response', latencyMs, nativeCache: false,
+  });
 }
 
 // ─── THE TRIMWARES OBJECT ─────────────────────────────────────────────────────

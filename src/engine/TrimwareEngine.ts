@@ -122,8 +122,20 @@ export class TrimwareEngine {
       }
     }
 
-    // 3. Context pruning
+    // 3. Context management — rolling window capper + keyword pruner
     let optimized = { ...request };
+
+    // Rolling window: keep only the last N non-system turns.
+    // Simple, predictable, prevents O(N²) cost growth in agent loops.
+    const maxTurns = (this.config.optimization as { maxHistoryTurns?: number }).maxHistoryTurns;
+    if (maxTurns && maxTurns > 0) {
+      const system    = optimized.messages.filter(m => m.role === 'system');
+      const nonSystem = optimized.messages.filter(m => m.role !== 'system');
+      const windowed  = nonSystem.slice(-maxTurns); // keep last N turns
+      optimized = { ...optimized, messages: [...system, ...windowed] };
+    }
+
+    // Keyword-relevance pruner (off by default — opt-in for long conversations)
     if (this.config.optimization.pruneContext) {
       optimized = { ...optimized, messages: this.pruner.prune(optimized.messages).messages };
     }
