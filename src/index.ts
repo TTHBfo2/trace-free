@@ -18,6 +18,11 @@ import { printReport } from './cli/analyze.js';
 import { BaseProvider } from './providers/BaseProvider.js';
 import { AnthropicProvider } from './providers/AnthropicProvider.js';
 
+// ─── One-liner API (recommended) ─────────────────────────────────────────────
+export { trimwares } from './trimwares.js';
+export type { Wrapped, TrimwaresReporting, OllamaClient } from './trimwares.js';
+
+// ─── Class-based API (advanced / existing code) ───────────────────────────────
 export { OpenAIProvider }    from './providers/OpenAIProvider.js';
 export { AnthropicProvider } from './providers/AnthropicProvider.js';
 export { GeminiProvider }    from './providers/GeminiProvider.js';
