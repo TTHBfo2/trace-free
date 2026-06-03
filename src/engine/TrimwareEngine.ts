@@ -49,7 +49,10 @@ export class TrimwareEngine {
       defaultModel: config.defaultModel ?? '',
       cache: {
         response: { enabled: true, ttlMs: rc.ttlMs ?? 5 * 60_000, maxEntries: rc.maxEntries ?? 2_000 },
-        semantic: { enabled: true, ttlMs: sc.ttlMs ?? 10 * 60_000, maxEntries: sc.maxEntries ?? 500, similarityThreshold: (sc as { similarityThreshold?: number }).similarityThreshold ?? 0.92 },
+        // 0.97 threshold prevents false positives on same-template/different-entity questions
+        // e.g. "capital of France?" must NOT match "capital of Germany?"
+        // Lower values like 0.92 produce incorrect cache hits on structurally similar questions
+        semantic: { enabled: true, ttlMs: sc.ttlMs ?? 10 * 60_000, maxEntries: sc.maxEntries ?? 500, similarityThreshold: (sc as { similarityThreshold?: number }).similarityThreshold ?? 0.97 },
         plan:     { enabled: true, ttlMs: pc.ttlMs ?? 30 * 60_000, maxEntries: pc.maxEntries ?? 200 },
       },
       optimization: {
