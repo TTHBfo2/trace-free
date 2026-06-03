@@ -90,34 +90,34 @@ The wrapped client is the **exact same type** as the original. Your existing cod
 
 | Layer | What gets caught | Verified saving |
 |---|---|---|
-| **Response cache** | Identical requests → served for $0 | = repeat traffic % |
-| **Semantic cache** | Near-identical prompts → local match, no API call | ~40-70% on FAQ workloads |
-| **Native prompt caching** | Stable system prompts + tool schemas → Anthropic cache_control injected | 90% on those tokens |
-| **Model routing** | Simple request on GPT-4o → routes to GPT-4o-mini | **94% per routed call** |
-| **Tool schema filter** | Agents: only sends tools relevant to current step | 5-15% per agent step |
-| **Context pruner** | Long conversations: removes irrelevant history | Configurable |
+| **Response cache** | Identical requests → served for $0 | Exactly = repeat traffic % |
+| **Heuristic cache** | Structurally similar prompts → local match, no API call | Varies — depends on text overlap |
+| **Native prompt caching** | Stable system prompts + tool schemas → Anthropic `cache_control` injected | 90% on those token prefixes |
+| **Tool schema filter** | Agents: only sends tools relevant to current step | 5-15% per step |
+| **Context pruner** | Long conversations: removes low-relevance history (opt-in) | Configurable |
+| **Model routing** | Routes simple requests to cheapest capable model (opt-in) | **94% per routed call** |
 
-Numbers verified with tiktoken BPE counts + provider pricing pages — not estimates.
+**What "verified" means:** Response cache and routing savings are proven mathematically with tiktoken BPE counts and provider public pricing. Heuristic cache savings depend on your app's traffic patterns — high for FAQ/support apps, near-zero for open-ended chat. See `VERIFICATION.md` for full methodology and known limitations.
+
+> **Note on heuristic cache:** This uses character trigram similarity, not semantic embeddings. It catches structurally similar prompts (same words, slight rephrasing). It will NOT catch conceptual paraphrases like "How do I check in?" vs "What's the arrival process?" — those require real embeddings, planned for v0.2.
 
 ---
 
-## Streaming works
+## Streaming
+
+The package intercepts streaming calls. On a cache miss, the stream passes through normally. On a cache hit, the cached response is returned immediately.
 
 ```ts
 const openai = trimwares.openai(new OpenAI());
-
-// stream: true works exactly as before
 const stream = await openai.chat.completions.create({
   model: 'gpt-4o-mini', messages, stream: true
 });
-
 for await (const chunk of stream) {
   process.stdout.write(chunk.choices[0]?.delta?.content ?? '');
 }
-
-// Cache miss: streamed normally, response cached for future calls
-// Cache hit: instant response (no stream needed — it's already there)
 ```
+
+> **Status:** Streaming interception code is implemented and tested with mock providers. Live API streaming validation (real SSE chunks) is in progress. Enable with confidence for cache misses; treat cache-hit streaming as experimental until v0.1.1.
 
 ---
 
@@ -197,19 +197,38 @@ Never the text. Cache keys are SHA-256 hashes — the original content is not re
 
 ---
 
+## Local-first — the real differentiator
+
+Most LLM observability tools require you to proxy your traffic through their servers. That means your prompts leave your infrastructure before they reach OpenAI or Anthropic.
+
+Trimwares runs **entirely inside your application process:**
+
+```
+Your App → trimwares → OpenAI/Anthropic   ← no proxy, no third party
+                ↓
+         .trimwares/session.jsonl (local, metadata only)
+```
+
+This matters for:
+- **Healthcare / HIPAA** — PHI in prompts never leaves your environment
+- **Finance / legal** — privileged content stays local
+- **Air-gapped deployments** — works with no outbound connection except to the LLM provider itself
+- **Enterprise compliance** — no vendor lock-in, no third-party data agreement required
+
 ## Why not alternatives
 
 | | Portkey / Helicone | GPTCache | Trimwares |
 |---|---|---|---|
-| Your prompts stored | On their servers | Locally | Never |
-| Works without internet | No (cloud proxy) | Yes | Yes |
+| Your prompts leave your infra | Yes (cloud proxy) | No | No |
+| Works without internet | No | Yes | Yes |
 | Cross-provider unified view | No | No | Yes |
 | Pre-call optimization | No | No | Yes |
-| Streaming support | Yes | No | Yes |
+| Streaming support | Yes | No | Yes (experimental) |
 | One-line install | Yes | No | Yes |
-| Multi-tenant isolation | Policy-based | None | Architecture-based |
+| Multi-tenant cache isolation | Policy-based | None | Architecture-based |
+| Model routing | Yes (paid) | No | Yes (opt-in) |
 
-**No extra AI calls.** Every optimization (caching, routing, tool filtering, prompt restructuring) is deterministic and algorithmic. Nothing uses another model to compress your prompts.
+**No extra AI calls.** Every optimization is deterministic and algorithmic — no inference calls, ever. This is intentional and will remain true even as the package grows.
 
 ---
 
@@ -220,14 +239,14 @@ Zero-config by default. All optimizations are on with safe conservative settings
 ```ts
 const openai = trimwares.openai(new OpenAI(), {
   cache: {
-    response: { ttlMs: 10 * 60 * 1000 },          // default: 5 min
-    semantic:  { similarityThreshold: 0.88 },       // default: 0.92
-    plan:      { enabled: false },                  // disable agent plan cache
+    response:  { ttlMs: 10 * 60 * 1000 },         // default: 5 min
+    heuristic: { similarityThreshold: 0.97 },      // default: 0.97 — conservative
+    plan:      { enabled: false },                 // disable agent plan cache
   },
   optimization: {
-    routeToCheapestModel: true,   // default: on — conservative, same provider only
-    filterToolSchemas:    true,   // default: on — only for requests with ≥ 3 tools
-    pruneContext:         false,  // default: off — enable for long conversations
+    routeToCheapestModel: true,   // default: OFF — opt-in, developer chose their model
+    filterToolSchemas:    true,   // default: on — only activates with ≥ 3 tools
+    pruneContext:         true,   // default: off — enable for long conversations
   },
 });
 ```

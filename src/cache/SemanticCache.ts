@@ -1,8 +1,13 @@
 import { LLMRequest, LLMResponse, CacheStats } from '../types/index.js';
 
-// Local-first semantic similarity cache — zero extra AI calls.
-// Uses character trigram TF-IDF vectors + cosine similarity.
-// No external dependencies, no inference calls, runs entirely in-process.
+// Local-first heuristic similarity cache — zero extra AI calls, zero ML models.
+// Uses character trigram TF-IDF vectors + cosine similarity to detect
+// structurally similar (not semantically equivalent) prompts.
+//
+// NOTE: This is NOT a semantic cache. It matches on character-level structure,
+// not meaning. "Capital of France?" and "Capital of Germany?" are structurally
+// similar and may match at low thresholds. Threshold 0.97 mitigates false positives.
+// True semantic caching (all-MiniLM-L6-v2 local embeddings) is planned for v0.2.
 
 interface SemanticEntry {
   response: LLMResponse;

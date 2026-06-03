@@ -82,7 +82,7 @@ export class LLMCostTrimmer {
       optimization: {
         compressPrompts:      config.optimization?.compressPrompts      ?? false,
         pruneContext:         config.optimization?.pruneContext          ?? false,
-        routeToCheapestModel: config.optimization?.routeToCheapestModel ?? true,  // on by default — conservative classifier
+        routeToCheapestModel: config.optimization?.routeToCheapestModel ?? false, // opt-in — dev chose their model intentionally
         filterToolSchemas:    config.optimization?.filterToolSchemas    ?? true,  // on by default — conservative fallback
       },
       pricing: config.pricing ?? {},

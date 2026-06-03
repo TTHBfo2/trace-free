@@ -184,6 +184,8 @@ export function renderReport(options: AnalyzeOptions): string {
 
   lines.push(sep);
   lines.push(dim('  Prompt content is never stored. This report uses token counts only.'));
+  lines.push(dim('  Token counts: estimated via local heuristic (±10% vs provider BPE).'));
+  lines.push(dim('  Costs: provider list pricing — verify exact amounts against your invoice.'));
   lines.push(dim('  trimwares.com/dashboard for historical trends and team analytics.'));
   lines.push('');
 

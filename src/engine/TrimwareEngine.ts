@@ -58,7 +58,7 @@ export class TrimwareEngine {
       optimization: {
         compressPrompts:      false,
         pruneContext:         config.optimization?.pruneContext          ?? false,
-        routeToCheapestModel: config.optimization?.routeToCheapestModel ?? true,
+        routeToCheapestModel: config.optimization?.routeToCheapestModel ?? false, // opt-in only
         filterToolSchemas:    (config.optimization as { filterToolSchemas?: boolean })?.filterToolSchemas ?? true,
       },
       pricing: config.pricing ?? {},
