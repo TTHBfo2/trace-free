@@ -75,8 +75,9 @@ export class LLMCostTrimmer {
       defaultModel: config.defaultModel ?? provider.defaultModel,
       cache: {
         response: { enabled: true,  ttlMs: responseCfg.ttlMs  ?? 5  * 60 * 1000, maxEntries: responseCfg.maxEntries ?? 2_000 },
-        semantic: { enabled: true,  ttlMs: semanticCfg.ttlMs  ?? 10 * 60 * 1000, maxEntries: semanticCfg.maxEntries ?? 500,
+        semantic: { enabled: false, ttlMs: semanticCfg.ttlMs  ?? 10 * 60 * 1000, maxEntries: semanticCfg.maxEntries ?? 500,
                     similarityThreshold: (semanticCfg as { similarityThreshold?: number }).similarityThreshold ?? 0.97 },
+        // Heuristic cache disabled by default — stress test confirmed false positives at 0.97.
         plan:     { enabled: true,  ttlMs: planCfg.ttlMs      ?? 30 * 60 * 1000, maxEntries: planCfg.maxEntries     ?? 200 },
       },
       optimization: {

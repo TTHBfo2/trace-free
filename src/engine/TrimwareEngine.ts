@@ -49,10 +49,12 @@ export class TrimwareEngine {
       defaultModel: config.defaultModel ?? '',
       cache: {
         response: { enabled: true, ttlMs: rc.ttlMs ?? 5 * 60_000, maxEntries: rc.maxEntries ?? 2_000 },
-        // 0.97 threshold prevents false positives on same-template/different-entity questions
-        // e.g. "capital of France?" must NOT match "capital of Germany?"
-        // Lower values like 0.92 produce incorrect cache hits on structurally similar questions
-        semantic: { enabled: true, ttlMs: sc.ttlMs ?? 10 * 60_000, maxEntries: sc.maxEntries ?? 500, similarityThreshold: (sc as { similarityThreshold?: number }).similarityThreshold ?? 0.97 },
+        // Heuristic cache DISABLED by default after stress testing confirmed false positives.
+        // Trigram similarity matches same-structure/different-entity questions at any threshold.
+        // E.g. "Does TechFlow integrate with GitHub?" matches "Does TechFlow integrate with Jira?"
+        // Safe to enable ONLY for near-identical text (copy-paste paraphrases).
+        // True semantic caching (all-MiniLM-L6-v2 local embeddings) is planned for v0.2.
+        semantic: { enabled: false, ttlMs: sc.ttlMs ?? 10 * 60_000, maxEntries: sc.maxEntries ?? 500, similarityThreshold: (sc as { similarityThreshold?: number }).similarityThreshold ?? 0.97 },
         plan:     { enabled: true, ttlMs: pc.ttlMs ?? 30 * 60_000, maxEntries: pc.maxEntries ?? 200 },
       },
       optimization: {
@@ -106,13 +108,18 @@ export class TrimwareEngine {
       return (cacheHit as unknown as { _rawResponse: RawSdkResult })._rawResponse;
     }
 
-    // 2. Semantic cache check
-    const semanticHit = this.semanticCache.get(request);
-    if (semanticHit) {
-      const latencyMs = Date.now() - startMs;
-      this.costEngine.record({ requestId, provider: this.provider, model: semanticHit.model, inputTokens: semanticHit.usage.inputTokens, outputTokens: semanticHit.usage.outputTokens, cached: true, cacheType: 'semantic', latencyMs, request, savings: semanticHit.cost });
-      this.logSession(requestId, semanticHit.model, semanticHit.usage.inputTokens, semanticHit.usage.outputTokens, request, true, 'semantic', latencyMs, false);
-      return (semanticHit as unknown as { _rawResponse: RawSdkResult })._rawResponse;
+    // 2. Heuristic cache check — only when explicitly enabled
+    // Disabled by default after stress testing confirmed false positives on
+    // same-structure/different-entity questions at any trigram threshold.
+    const heuristicEnabled = (this.config.cache.semantic as { enabled?: boolean }).enabled === true;
+    if (heuristicEnabled) {
+      const semanticHit = this.semanticCache.get(request);
+      if (semanticHit) {
+        const latencyMs = Date.now() - startMs;
+        this.costEngine.record({ requestId, provider: this.provider, model: semanticHit.model, inputTokens: semanticHit.usage.inputTokens, outputTokens: semanticHit.usage.outputTokens, cached: true, cacheType: 'semantic', latencyMs, request, savings: semanticHit.cost });
+        this.logSession(requestId, semanticHit.model, semanticHit.usage.inputTokens, semanticHit.usage.outputTokens, request, true, 'semantic', latencyMs, false);
+        return (semanticHit as unknown as { _rawResponse: RawSdkResult })._rawResponse;
+      }
     }
 
     // 3. Context pruning
