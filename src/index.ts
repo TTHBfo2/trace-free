@@ -12,6 +12,7 @@ import { ContextPruner } from './optimization/ContextPruner.js';
 import { ModelRouter } from './optimization/ModelRouter.js';
 import { ToolSchemaFilter } from './optimization/ToolSchemaFilter.js';
 import { WasteReporter } from './reporting/WasteReport.js';
+import { buildEnrichedWasteReport } from './reporting/EnrichedWasteReport.js';
 import { TokenAttributor } from './attribution/TokenAttributor.js';
 import { SessionLog } from './telemetry/SessionLog.js';
 import { printReport } from './cli/analyze.js';
@@ -206,9 +207,17 @@ export class LLMCostTrimmer {
 
   // ─── Reporting ─────────────────────────────────────────────────────────────
 
-  getCostReport(): CostReport { return this.costEngine.getCostReport(); }
+  getCostReport(): CostReport  { return this.costEngine.getCostReport(); }
 
   getWasteReport(): WasteReport { return this.wasteReporter.buildReport(this.costEngine.getEntries()); }
+
+  /** Enriched waste report — dollar amounts by category (free tier: current session). */
+  getEnrichedWasteReport() {
+    return buildEnrichedWasteReport(
+      this.sessionLog.getBuffer() as import('./types/index.js').SessionLogEntry[],
+      this.costEngine.getCostReport(),
+    );
+  }
 
   printReport(): void { printReport({ entries: this.sessionLog.getBuffer() }); }
 

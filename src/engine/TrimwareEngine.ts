@@ -4,6 +4,8 @@ import {
   ProviderName, CacheType,
 } from '../types/index.js';
 import { CostEngine, generateRequestId } from '../core/CostEngine.js';
+import { buildEnrichedWasteReport } from '../reporting/EnrichedWasteReport.js';
+import { EnrichedWasteReport } from '../types/index.js';
 import { ResponseCache } from '../cache/ResponseCache.js';
 import { SemanticCache } from '../cache/SemanticCache.js';
 import { AgentPlanCache } from '../cache/AgentPlanCache.js';
@@ -203,9 +205,15 @@ export class TrimwareEngine {
 
   // ─── Reporting API ────────────────────────────────────────────────────────
 
-  getCostReport(): CostReport  { return this.costEngine.getCostReport(); }
-  getWasteReport(): WasteReport { return this.wasteReporter.buildReport(this.costEngine.getEntries()); }
-  printReport(): void           { printReport({ entries: this.sessionLog.getBuffer() }); }
+  getCostReport(): CostReport     { return this.costEngine.getCostReport(); }
+  getWasteReport(): WasteReport   { return this.wasteReporter.buildReport(this.costEngine.getEntries()); }
+  getEnrichedWasteReport(): EnrichedWasteReport {
+    return buildEnrichedWasteReport(
+      this.sessionLog.getBuffer() as import('../types/index.js').SessionLogEntry[],
+      this.costEngine.getCostReport(),
+    );
+  }
+  printReport(): void             { printReport({ entries: this.sessionLog.getBuffer() }); }
   resetStats(): void {
     this.costEngine.reset();
     this.responseCache.clear();

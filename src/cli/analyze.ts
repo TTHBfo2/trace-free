@@ -1,4 +1,6 @@
-import { SessionLogEntry } from '../types/index.js';
+import { SessionLogEntry, EnrichedWasteReport } from '../types/index.js';
+import { buildEnrichedWasteReport } from '../reporting/EnrichedWasteReport.js';
+import { CostEngine } from '../core/CostEngine.js';
 
 // Terminal color codes
 const C = {
@@ -182,11 +184,76 @@ export function renderReport(options: AnalyzeOptions): string {
     lines.push('');
   }
 
+  // ── Enriched waste intelligence ───────────────────────────────────────────
+  const costEngine = new CostEngine();
+  for (const e of entries) {
+    costEngine.record({
+      requestId:    e.requestId,
+      provider:     e.provider,
+      model:        e.model,
+      inputTokens:  e.attribution.totalInputTokens,
+      outputTokens: e.attribution.totalOutputTokens,
+      cached:       e.cached,
+      cacheType:    e.cacheType as import('../types/index.js').CacheType,
+      latencyMs:    e.latencyMs,
+      request:      { messages: [{ role: 'user', content: '' }] },
+      savings:      e.cached ? e.attribution.totalCost : 0,
+    });
+  }
+
+  const enriched: EnrichedWasteReport = buildEnrichedWasteReport(entries, costEngine.getCostReport());
+
+  if (enriched.sessionRequests > 0) {
+    lines.push(sep);
+    lines.push(`  ${bold('Where your money is going')}  ${dim('(current session)')}`);
+    lines.push('');
+
+    // The aha-moment: what you spent vs what was recoverable
+    if (enriched.alreadySaved > 0) {
+      lines.push(`  ${green('✓')} Already saved  ${bold(green(usd(enriched.alreadySaved)))}  ${gray('(response cache)')}`);
+    }
+
+    const SEVERITY_ICON: Record<string, string> = {
+      critical: '🔴',
+      warning:  '🟡',
+      info:     '⚪',
+      good:     '🟢',
+    };
+
+    const cats = enriched.categories;
+    const wasteCats = [
+      cats.unusedToolSchemas,
+      cats.redundantRAGChunks,
+      cats.staleContext,
+      cats.overpoweredModel,
+    ].filter(c => c.cost > 0);
+
+    for (const cat of wasteCats) {
+      const icon    = SEVERITY_ICON[cat.severity] ?? '⚪';
+      const monthly = cat.projectedMonthlySaving && cat.projectedMonthlySaving > 0
+        ? `  ${gray('→ fix saves ' + usd(cat.projectedMonthlySaving) + '/mo')}`
+        : '';
+      lines.push(`  ${icon} ${cat.label.padEnd(26)} ${bold(yellow(usd(cat.cost)))}${monthly}`);
+    }
+
+    lines.push('');
+    lines.push(`  ${cats.genuineWork.label.padEnd(28)} ${gray(usd(cats.genuineWork.cost))}  ${dim('(necessary spend)')}`);
+
+    if (enriched.recoverableSpend > 0) {
+      lines.push('');
+      lines.push(`  ${bold('Recoverable this session')}  ${bold(green(usd(enriched.recoverableSpend)))}  ${dim(`(${enriched.recoverablePercent}% of current spend)`)}`);
+      if (enriched.topFix) {
+        lines.push(`  ${bold('Top action')}  ${enriched.topFix.fix ?? ''}  ${dim('→ ' + (enriched.topFix.fixDescription ?? ''))}`);
+      }
+    }
+    lines.push('');
+  }
+
   lines.push(sep);
   lines.push(dim('  Prompt content is never stored. This report uses token counts only.'));
   lines.push(dim('  Token counts: estimated via local heuristic (±10% vs provider BPE).'));
   lines.push(dim('  Costs: provider list pricing — verify exact amounts against your invoice.'));
-  lines.push(dim('  trimwares.com/dashboard for historical trends and team analytics.'));
+  lines.push(dim('  trimwares.com/dashboard for 30-day history and team analytics.'));
   lines.push('');
 
   return lines.join('\n');

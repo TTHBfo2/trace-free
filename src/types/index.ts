@@ -157,6 +157,46 @@ export interface ModelCostSummary extends ProviderCostSummary {
   provider: ProviderName;
 }
 
+// ─── Enriched Waste Intelligence ─────────────────────────────────────────────
+
+export interface WasteCategory {
+  label:                  string;
+  tokens:                 number;
+  cost:                   number;
+  percentOfSpend:         number;
+  severity:               'critical' | 'warning' | 'info' | 'good';
+  fix?:                   string;          // config key to apply
+  fixDescription?:        string;          // what applying the fix does
+  projectedMonthlySaving?: number;         // estimated if fix applied
+}
+
+/**
+ * Enriched waste report — dollar-denominated breakdown by waste category.
+ * This is what the CLI and dashboard both consume.
+ * Free tier: current session data.
+ * Pro tier: 30/90-day history of the same structure.
+ */
+export interface EnrichedWasteReport {
+  totalGrossSpend:     number;   // what you would have spent without any optimization
+  alreadySaved:        number;   // what response cache already saved this session
+  currentSpend:        number;   // what you actually spent
+  recoverableSpend:    number;   // additional recoverable with further optimization
+  recoverablePercent:  number;   // recoverableSpend / currentSpend
+
+  categories: {
+    unusedToolSchemas:  WasteCategory;  // tool defs sent when not used
+    redundantRAGChunks: WasteCategory;  // retrieved docs sent repeatedly
+    staleContext:       WasteCategory;  // old conversation history
+    repeatedPrompts:    WasteCategory;  // already-seen questions (cache hits)
+    overpoweredModel:   WasteCategory;  // expensive model on simple tasks
+    genuineWork:        WasteCategory;  // tokens that had to be sent — not waste
+  };
+
+  topFix:          WasteCategory | null;  // highest-ROI action right now
+  sessionRequests: number;
+  generatedAt:     number;
+}
+
 // ─── Reports ──────────────────────────────────────────────────────────────────
 
 export interface CostReport {

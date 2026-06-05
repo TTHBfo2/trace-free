@@ -7,6 +7,7 @@ import { generateRequestId } from './core/CostEngine.js';
 export interface TrimwaresReporting {
   getCostReport(): CostReport;
   getWasteReport(): WasteReport;
+  getEnrichedWasteReport(): import('./types/index.js').EnrichedWasteReport;
   printReport(): void;
   resetStats(): void;
 }
@@ -16,10 +17,11 @@ export type Wrapped<T> = T & { trimwares: TrimwaresReporting };
 
 function makeReporting(engine: TrimwareEngine): TrimwaresReporting {
   return {
-    getCostReport:  () => engine.getCostReport(),
-    getWasteReport: () => engine.getWasteReport(),
-    printReport:    () => engine.printReport(),
-    resetStats:     () => engine.resetStats(),
+    getCostReport:          () => engine.getCostReport(),
+    getWasteReport:         () => engine.getWasteReport(),
+    getEnrichedWasteReport: () => engine.getEnrichedWasteReport(),
+    printReport:            () => engine.printReport(),
+    resetStats:             () => engine.resetStats(),
   };
 }
 
