@@ -306,9 +306,13 @@ if (command === 'serve') {
       return;
     }
 
-    let filePath = join(UI_DIR, req.url === '/' ? 'index.html' : req.url.split('?')[0]);
-    if (!existsSync(filePath) && !extname(filePath)) {
-      filePath = join(UI_DIR, req.url.replace(/\/$/, ''), 'index.html');
+    const urlPath  = req.url.split('?')[0];
+    let   filePath = join(UI_DIR, urlPath);
+    // No file extension → could be a directory route (e.g. /attribution/)
+    // Always resolve to index.html for extensionless paths
+    if (!extname(urlPath) || urlPath === '/') {
+      const idx = join(UI_DIR, urlPath.replace(/\/?$/, ''), 'index.html');
+      filePath = existsSync(idx) ? idx : join(UI_DIR, 'index.html');
     }
     if (!existsSync(filePath)) filePath = join(UI_DIR, 'index.html');
 
