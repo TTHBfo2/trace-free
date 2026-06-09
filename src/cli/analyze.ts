@@ -108,7 +108,7 @@ export function renderReport(options: AnalyzeOptions): string {
 
   // ── Header ────────────────────────────────────────────────────
   lines.push('');
-  lines.push(bold(`  ⚡ Trimwares — LLM Cost Report`));
+  lines.push(bold(`  ⚡ Trimwares Trace — Cost Report`));
   lines.push(sep);
 
   // ── Summary ───────────────────────────────────────────────────
@@ -253,7 +253,7 @@ export function renderReport(options: AnalyzeOptions): string {
   lines.push(dim('  Prompt content is never stored. This report uses token counts only.'));
   lines.push(dim('  Token counts: estimated via local heuristic (±10% vs provider BPE).'));
   lines.push(dim('  Costs: provider list pricing — verify exact amounts against your invoice.'));
-  lines.push(dim('  trimwares.com/dashboard for 30-day history and team analytics.'));
+  lines.push(dim('  trace.trimwares.com for 30-day history, team analytics and more.'));
   lines.push('');
 
   return lines.join('\n');

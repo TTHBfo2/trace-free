@@ -329,7 +329,7 @@ if (command === 'serve') {
   server.listen(PORT, '127.0.0.1', () => {
     const url = `http://localhost:${PORT}`;
     const expires = license.exp ? new Date(license.exp * 1000).toISOString().split('T')[0] : 'n/a';
-    console.log(`\n  \x1b[32m⚡ Trimwares Dashboard\x1b[0m  \x1b[90m(${license.tier} · expires ${expires})\x1b[0m`);
+    console.log(`\n  \x1b[32m⚡ Trimwares Trace\x1b[0m  \x1b[90m(${license.tier} · expires ${expires})\x1b[0m`);
     console.log(`  \x1b[90mLocal:\x1b[0m   ${url}`);
     console.log(`  \x1b[90mData:\x1b[0m    ${resolve(process.cwd(), '.trimwares/session.jsonl')}`);
     console.log(`  \x1b[90mPolling every 2.5s — live as your app runs. Ctrl+C to stop.\x1b[0m\n`);
