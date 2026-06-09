@@ -20,6 +20,7 @@
     "dist/**/*.d.ts",
     "!dist/**/*.map",
     "bin/trimwares.js",
+    "ui/**",
     "README.md",
     "LICENSE"
   ],
