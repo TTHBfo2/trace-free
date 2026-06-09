@@ -1,5 +1,5 @@
 {
-  "name": "trimwares-trace",
+  "name": "@trimwares/trace",
   "version": "0.1.0",
   "type": "module",
   "description": "Trimwares Trace — token attribution and cost tracking for LLM applications. See exactly where your AI money goes: system prompts, tool schemas, RAG chunks, history, user queries. No prompt content stored. No extra AI calls.",
@@ -69,12 +69,12 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/TTHBfo2/llm-cost-trimmer"
+    "url": "https://github.com/TTHBfo2/LLM-cost-trimmer"
   },
   "bugs": {
-    "url": "https://github.com/TTHBfo2/llm-cost-trimmer/issues"
+    "url": "https://github.com/TTHBfo2/LLM-cost-trimmer/issues"
   },
-  "homepage": "https://github.com/TTHBfo2/llm-cost-trimmer#readme",
+  "homepage": "https://trace.trimwares.com",
   "devDependencies": {
     "@rollup/plugin-node-resolve": "^15.2.3",
     "@rollup/plugin-typescript": "^11.1.6",
