@@ -44,7 +44,7 @@ export class SessionLog {
       return readFileSync(this.logPath, 'utf8')
         .split('\n')
         .filter(Boolean)
-        .map(line => JSON.parse(line) as SessionLogEntry);
+        .flatMap(line => { try { return [JSON.parse(line) as SessionLogEntry]; } catch { return []; } });
     } catch {
       return [];
     }

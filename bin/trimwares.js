@@ -183,7 +183,7 @@ if (command === 'serve') {
     try {
       return readFileSync(sessionPath, 'utf8')
         .split('\n').filter(Boolean).slice(-500)
-        .map(l => JSON.parse(l));
+        .flatMap(l => { try { return [JSON.parse(l)]; } catch { return []; } });
     } catch { return []; }
   }
 
