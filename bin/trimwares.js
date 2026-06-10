@@ -187,6 +187,41 @@ if (command === 'serve') {
     } catch { return []; }
   }
 
+  function loadHistoryEntries() {
+    const histPath = resolve(process.cwd(), '.trimwares/history.jsonl');
+    if (!existsSync(histPath)) return [];
+    const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    try {
+      return readFileSync(histPath, 'utf8')
+        .split('\n').filter(Boolean)
+        .flatMap(l => { try { return [JSON.parse(l)]; } catch { return []; } })
+        .filter(e => e.timestamp && new Date(e.timestamp).getTime() >= cutoff);
+    } catch { return []; }
+  }
+
+  function groupHistoryByDay(entries) {
+    const byDay = {};
+    for (const e of entries) {
+      const day = e.timestamp?.split('T')[0];
+      if (!day) continue;
+      if (!byDay[day]) byDay[day] = { date: day, spend: 0, requests: 0, saved: 0 };
+      byDay[day].spend    += e.attribution?.totalCost ?? 0;
+      byDay[day].requests += 1;
+      if (e.cached) byDay[day].saved += e.attribution?.totalCost ?? 0;
+    }
+    const days = Object.values(byDay).sort((a, b) => a.date.localeCompare(b.date));
+    const spend30d    = days.reduce((s, d) => s + d.spend, 0);
+    const requests30d = days.reduce((s, d) => s + d.requests, 0);
+    return {
+      days,
+      totals: {
+        spend30d,
+        requests30d,
+        avgDailySpend: days.length > 0 ? spend30d / days.length : 0,
+      },
+    };
+  }
+
   function loadLatestSimulation() {
     const simDir = resolve(process.cwd(), 'simulation-results');
     if (!existsSync(simDir)) return null;
@@ -297,6 +332,13 @@ if (command === 'serve') {
         waste,
         attribution: { sessionAgg, sessionCost, scenarios },
       }));
+      return;
+    }
+
+    if (req.url === '/api/history') {
+      const entries = loadHistoryEntries();
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify(groupHistoryByDay(entries)));
       return;
     }
 

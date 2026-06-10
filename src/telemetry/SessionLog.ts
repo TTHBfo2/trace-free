@@ -3,21 +3,24 @@ import { writeFileSync, mkdirSync, readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { SessionLogEntry } from '../types/index.js';
 
-// Writes metadata-only session logs to .trimwares/session.jsonl
+// Writes metadata-only session logs to .trimwares/session.jsonl and history.jsonl
 // NEVER stores prompt content, response content, or API keys — only counts and costs.
 
-const LOG_DIR  = '.trimwares';
-const LOG_FILE = 'session.jsonl';
+const LOG_DIR   = '.trimwares';
+const LOG_FILE  = 'session.jsonl';
+const HIST_FILE = 'history.jsonl';
 
 export class SessionLog {
   private logPath: string;
+  private historyPath: string;
   private enabled: boolean;
   private buffer: SessionLogEntry[] = [];
 
   constructor(options: { enabled?: boolean; dir?: string } = {}) {
     this.enabled = options.enabled ?? true;
     const dir = options.dir ?? LOG_DIR;
-    this.logPath = join(process.cwd(), dir, LOG_FILE);
+    this.logPath     = join(process.cwd(), dir, LOG_FILE);
+    this.historyPath = join(process.cwd(), dir, HIST_FILE);
 
     if (this.enabled) {
       try {
@@ -32,7 +35,9 @@ export class SessionLog {
     if (!this.enabled) return;
     this.buffer.push(entry);
     try {
-      writeFileSync(this.logPath, JSON.stringify(entry) + '\n', { flag: 'a', encoding: 'utf8' });
+      const line = JSON.stringify(entry) + '\n';
+      writeFileSync(this.logPath,     line, { flag: 'a', encoding: 'utf8' });
+      writeFileSync(this.historyPath, line, { flag: 'a', encoding: 'utf8' });
     } catch {
       // non-fatal — never crash the app over telemetry
     }
