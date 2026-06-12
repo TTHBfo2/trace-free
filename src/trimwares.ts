@@ -129,8 +129,10 @@ function wrapOpenAICompatible<T extends object>(
                     recordStreamingCacheHit(engine, request, cacheHit, streamStart);
                     return buildFakeOpenAIStream(extractCachedContent(cacheHit));
                   }
-                  const stream = await (compValue as Function).call(compTarget, params) as AsyncIterable<unknown>;
-                  return wrapOpenAIStream(stream, request, engine);
+                  // Request usage data in the final chunk (OpenAI / Groq support this)
+                  const streamParams = { ...params, stream_options: { include_usage: true } };
+                  const stream = await (compValue as Function).call(compTarget, streamParams) as AsyncIterable<unknown>;
+                  return wrapOpenAIStream(stream, request, engine, streamStart);
                 }
 
                 // Non-streaming: full intercept
@@ -180,7 +182,7 @@ function wrapAnthropic<T extends object>(client: T, config?: TrimmerConfig): Wra
                 return buildFakeAnthropicStream(extractCachedContent(cacheHit));
               }
               const stream = await (msgValue as Function).call(msgTarget, params) as AsyncIterable<unknown>;
-              return wrapAnthropicStream(stream, request, engine);
+              return wrapAnthropicStream(stream, request, engine, streamStart);
             }
 
             return engine.intercept(request, async (optimized) => {
@@ -334,11 +336,13 @@ async function* wrapOpenAIStream(
   stream: AsyncIterable<unknown>,
   request: LLMRequest,
   engine: TrimwareEngine,
+  startMs: number,
 ): AsyncIterable<unknown> {
   let fullContent = '';
   let model = request.model ?? '';
   let inputTokens = 0;
   let outputTokens = 0;
+  const requestId = generateRequestId();
 
   for await (const chunk of stream) {
     const c = chunk as Record<string, unknown>;
@@ -350,23 +354,41 @@ async function* wrapOpenAIStream(
     yield chunk;
   }
 
-  // Cache the completed response
-  const pricing = engine.costEngine.getPricing(model);
-  const cost    = engine.costEngine.computeCost(inputTokens, outputTokens, pricing);
-  const cached  = { content: fullContent, model, provider: engine.provider, usage: { inputTokens, outputTokens, cachedTokens: 0, totalTokens: inputTokens + outputTokens }, cost, savings: 0, cached: false, cacheType: 'none' as const, requestId: 'stream', latencyMs: 0, _rawResponse: { choices: [{ message: { content: fullContent } }] } };
-  engine.responseCache.set(request, cached as unknown as import('./types/index.js').LLMResponse);
-  engine.costEngine.record({ requestId: 'stream', provider: engine.provider, model, inputTokens, outputTokens, cached: false, cacheType: 'none', latencyMs: 0, request, savings: 0 });
+  const latencyMs  = Date.now() - startMs;
+  const pricing    = engine.costEngine.getPricing(model);
+  const attribution = engine.attributor.attribute(request, outputTokens, pricing);
+
+  // Fall back to attributor counts if provider didn't send usage in stream
+  if (inputTokens === 0) inputTokens   = attribution.totalInputTokens;
+  if (outputTokens === 0) outputTokens = attribution.totalOutputTokens;
+
+  const cost = engine.costEngine.computeCost(inputTokens, outputTokens, pricing);
+  const responseForCache = {
+    content: fullContent, model, provider: engine.provider,
+    usage: { inputTokens, outputTokens, cachedTokens: 0, totalTokens: inputTokens + outputTokens },
+    cost, savings: 0, cached: false, cacheType: 'none' as const,
+    requestId, latencyMs,
+    _rawResponse: { choices: [{ message: { content: fullContent } }] },
+  };
+  engine.responseCache.set(request, responseForCache as unknown as import('./types/index.js').LLMResponse);
+  engine.costEngine.record({ requestId, provider: engine.provider, model, inputTokens, outputTokens, cached: false, cacheType: 'none', latencyMs, request, savings: 0 });
+  engine.sessionLog.write({
+    timestamp: Date.now(), requestId, provider: engine.provider, model,
+    attribution, cached: false, cacheType: 'none', latencyMs, nativeCache: false,
+  });
 }
 
 async function* wrapAnthropicStream(
   stream: AsyncIterable<unknown>,
   request: LLMRequest,
   engine: TrimwareEngine,
+  startMs: number,
 ): AsyncIterable<unknown> {
   let fullContent = '';
   let model = request.model ?? '';
   let inputTokens = 0;
   let outputTokens = 0;
+  const requestId = generateRequestId();
 
   for await (const chunk of stream) {
     const c = chunk as Record<string, unknown>;
@@ -381,17 +403,34 @@ async function* wrapAnthropicStream(
       if (usage) { inputTokens = usage['input_tokens'] ?? 0; }
     }
     if (c['type'] === 'message_delta') {
-      const usage = (c['usage'] as Record<string, number>);
+      const usage = c['usage'] as Record<string, number>;
       if (usage) { outputTokens = usage['output_tokens'] ?? 0; }
     }
     yield chunk;
   }
 
-  const pricing = engine.costEngine.getPricing(model);
-  const cost    = engine.costEngine.computeCost(inputTokens, outputTokens, pricing);
-  const cached  = { content: fullContent, model, provider: engine.provider, usage: { inputTokens, outputTokens, cachedTokens: 0, totalTokens: inputTokens + outputTokens }, cost, savings: 0, cached: false, cacheType: 'none' as const, requestId: 'stream', latencyMs: 0, _rawResponse: { content: [{ type: 'text', text: fullContent }] } };
-  engine.responseCache.set(request, cached as unknown as import('./types/index.js').LLMResponse);
-  engine.costEngine.record({ requestId: 'stream', provider: engine.provider, model, inputTokens, outputTokens, cached: false, cacheType: 'none', latencyMs: 0, request, savings: 0 });
+  const latencyMs   = Date.now() - startMs;
+  const pricing     = engine.costEngine.getPricing(model);
+  const attribution = engine.attributor.attribute(request, outputTokens, pricing);
+
+  // Anthropic always sends usage in message_start/message_delta — fallback just in case
+  if (inputTokens === 0) inputTokens   = attribution.totalInputTokens;
+  if (outputTokens === 0) outputTokens = attribution.totalOutputTokens;
+
+  const cost = engine.costEngine.computeCost(inputTokens, outputTokens, pricing);
+  const responseForCache = {
+    content: fullContent, model, provider: engine.provider,
+    usage: { inputTokens, outputTokens, cachedTokens: 0, totalTokens: inputTokens + outputTokens },
+    cost, savings: 0, cached: false, cacheType: 'none' as const,
+    requestId, latencyMs,
+    _rawResponse: { content: [{ type: 'text', text: fullContent }] },
+  };
+  engine.responseCache.set(request, responseForCache as unknown as import('./types/index.js').LLMResponse);
+  engine.costEngine.record({ requestId, provider: engine.provider, model, inputTokens, outputTokens, cached: false, cacheType: 'none', latencyMs, request, savings: 0 });
+  engine.sessionLog.write({
+    timestamp: Date.now(), requestId, provider: engine.provider, model,
+    attribution, cached: false, cacheType: 'none', latencyMs, nativeCache: false,
+  });
 }
 
 // ─── Denormalizers: our optimized LLMRequest → back to SDK format ─────────────
