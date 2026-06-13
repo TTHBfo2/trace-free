@@ -26,7 +26,7 @@ interface ModelSpec {
 const MODEL_REGISTRY: ModelSpec[] = [
   // Budget
   { model: 'gpt-4o-mini',              provider: 'openai',    pricing: { inputPerMillion: 0.15,  outputPerMillion: 0.60  }, maxContextTokens: 128_000, supportsTools: true,  quality: 'budget'   },
-  { model: 'claude-haiku-4-5',         provider: 'anthropic', pricing: { inputPerMillion: 0.80,  outputPerMillion: 4.00  }, maxContextTokens: 200_000, supportsTools: true,  quality: 'budget'   },
+  { model: 'claude-haiku-4-5',         provider: 'anthropic', pricing: { inputPerMillion: 1.00,  outputPerMillion: 5.00  }, maxContextTokens: 200_000, supportsTools: true,  quality: 'budget'   },
   { model: 'gemini-1.5-flash',         provider: 'gemini',    pricing: { inputPerMillion: 0.075, outputPerMillion: 0.30  }, maxContextTokens: 1_000_000, supportsTools: true, quality: 'budget'  },
   { model: 'llama-3.1-8b-instant',     provider: 'groq',      pricing: { inputPerMillion: 0.05,  outputPerMillion: 0.08  }, maxContextTokens: 128_000, supportsTools: false, quality: 'budget'   },
   // Standard
@@ -35,7 +35,7 @@ const MODEL_REGISTRY: ModelSpec[] = [
   { model: 'gemini-1.5-pro',           provider: 'gemini',    pricing: { inputPerMillion: 1.25,  outputPerMillion: 5.00  }, maxContextTokens: 1_000_000, supportsTools: true, quality: 'standard'},
   { model: 'llama-3.3-70b-versatile',  provider: 'groq',      pricing: { inputPerMillion: 0.59,  outputPerMillion: 0.79  }, maxContextTokens: 128_000, supportsTools: false, quality: 'standard' },
   // Premium
-  { model: 'claude-opus-4-7',          provider: 'anthropic', pricing: { inputPerMillion: 15.00, outputPerMillion: 75.00 }, maxContextTokens: 200_000, supportsTools: true,  quality: 'premium'  },
+  { model: 'claude-opus-4-7',          provider: 'anthropic', pricing: { inputPerMillion: 5.00,  outputPerMillion: 25.00 }, maxContextTokens: 200_000, supportsTools: true,  quality: 'premium'  },
 ];
 
 // Keywords that signal a request needs deep reasoning — don't downgrade these

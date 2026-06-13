@@ -19,9 +19,9 @@ const DEFAULT_PRICING: Record<string, ModelPricing> = {
   'gpt-4-turbo':          { inputPerMillion: 10.00, outputPerMillion: 30.00 },
   'gpt-3.5-turbo':        { inputPerMillion: 0.50,  outputPerMillion: 1.50  },
   // Anthropic
-  'claude-opus-4-7':      { inputPerMillion: 15.00, outputPerMillion: 75.00 },
+  'claude-opus-4-7':      { inputPerMillion: 5.00,  outputPerMillion: 25.00 },
   'claude-sonnet-4-6':    { inputPerMillion: 3.00,  outputPerMillion: 15.00 },
-  'claude-haiku-4-5':     { inputPerMillion: 0.80,  outputPerMillion: 4.00  },
+  'claude-haiku-4-5':     { inputPerMillion: 1.00,  outputPerMillion: 5.00  },
   'claude-3-5-sonnet':    { inputPerMillion: 3.00,  outputPerMillion: 15.00 },
   'claude-3-5-haiku':     { inputPerMillion: 0.80,  outputPerMillion: 4.00  },
   // Gemini
