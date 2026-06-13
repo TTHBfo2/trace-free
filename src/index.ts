@@ -40,7 +40,7 @@ export * from './types/index.js';
  * @example
  * ```ts
  * import OpenAI from 'openai';
- * import { LLMCostTrimmer, OpenAIProvider } from '@tthbfo2/llm-cost-trimmer';
+ * import { LLMCostTrimmer, OpenAIProvider } from '@trimwares/trace';
  *
  * const trimmer = new LLMCostTrimmer(new OpenAIProvider(new OpenAI()));
  * const response = await trimmer.chat({ messages: [{ role: 'user', content: 'Hello' }] });
