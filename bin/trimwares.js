@@ -152,7 +152,7 @@ if (command === 'login') {
 
 if (command === 'clear') {
   const { unlinkSync, existsSync } = await import('fs');
-  const path = '.trimwares/session.jsonl';
+  const path = `${process.env.TRIMWARES_LOG_DIR ?? '.trimwares'}/session.jsonl`;
   if (existsSync(path)) { unlinkSync(path); console.log('Session log cleared.'); }
   else { console.log('No session log found.'); }
   process.exit(0);

@@ -125,7 +125,7 @@ The terminal report and dashboard show exactly how your spend splits across thes
 |---|---|
 | OpenAI (GPT-4o, GPT-4o-mini, GPT-4-turbo) | ✓ Implemented · unit-tested |
 | Anthropic (Claude Opus, Sonnet, Haiku) | ✓ Implemented · unit-tested |
-| Groq (LLaMA 3.3 70B, LLaMA 3.1 8B, Mixtral) | ✓ Implemented · **live-tested** |
+| Groq (LLaMA 3.3 70B, LLaMA 3.1 8B, Mixtral) | ✓ Implemented · **live-tested** (15/15, 2026-06-03) |
 | Google Gemini (1.5 Pro, 1.5 Flash, 2.0 Flash) | ✓ Implemented · unit-tested |
 | Ollama (any local model) | ✓ Implemented · unit-tested |
 

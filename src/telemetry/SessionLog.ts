@@ -18,7 +18,7 @@ export class SessionLog {
 
   constructor(options: { enabled?: boolean; dir?: string } = {}) {
     this.enabled = options.enabled ?? true;
-    const dir = options.dir ?? LOG_DIR;
+    const dir = options.dir ?? process.env.TRIMWARES_LOG_DIR ?? LOG_DIR;
     this.logPath     = join(process.cwd(), dir, LOG_FILE);
     this.historyPath = join(process.cwd(), dir, HIST_FILE);
 
