@@ -15,6 +15,9 @@ export interface TrimwaresReporting {
 /** Any wrapped client gets the original type PLUS a .trimwares reporting namespace */
 export type Wrapped<T> = T & { trimwares: TrimwaresReporting };
 
+/** A proxied SDK method retrieved via Reflect.get -- shape is unknown until called */
+type ProxiedMethod = (...args: unknown[]) => unknown;
+
 function makeReporting(engine: TrimwareEngine): TrimwaresReporting {
   return {
     getCostReport:          () => engine.getCostReport(),
@@ -131,14 +134,14 @@ function wrapOpenAICompatible<T extends object>(
                   }
                   // Request usage data in the final chunk (OpenAI / Groq support this)
                   const streamParams = { ...params, stream_options: { include_usage: true } };
-                  const stream = await (compValue as Function).call(compTarget, streamParams) as AsyncIterable<unknown>;
+                  const stream = await (compValue as ProxiedMethod).call(compTarget, streamParams) as AsyncIterable<unknown>;
                   return wrapOpenAIStream(stream, request, engine, streamStart);
                 }
 
                 // Non-streaming: full intercept
                 return engine.intercept(request, async (optimized) => {
                   const sdkParams = denormalizeOpenAIParams(params, optimized);
-                  return (compValue as Function).call(compTarget, sdkParams) as Promise<RawSdkResult>;
+                  return (compValue as ProxiedMethod).call(compTarget, sdkParams) as Promise<RawSdkResult>;
                 }, false);
               };
             },
@@ -181,13 +184,13 @@ function wrapAnthropic<T extends object>(client: T, config?: TrimmerConfig): Wra
                 recordStreamingCacheHit(engine, request, cacheHit, streamStart);
                 return buildFakeAnthropicStream(extractCachedContent(cacheHit));
               }
-              const stream = await (msgValue as Function).call(msgTarget, params) as AsyncIterable<unknown>;
+              const stream = await (msgValue as ProxiedMethod).call(msgTarget, params) as AsyncIterable<unknown>;
               return wrapAnthropicStream(stream, request, engine, streamStart);
             }
 
             return engine.intercept(request, async (optimized) => {
               const sdkParams = denormalizeAnthropicParams(params, optimized, engine);
-              return (msgValue as Function).call(msgTarget, sdkParams) as Promise<RawSdkResult>;
+              return (msgValue as ProxiedMethod).call(msgTarget, sdkParams) as Promise<RawSdkResult>;
             }, false);
           };
         },
@@ -212,7 +215,7 @@ function wrapGemini<T extends object>(client: T, config?: TrimmerConfig): Wrappe
 
       // Wrap getGenerativeModel to return a proxied model
       return (modelParams: Record<string, unknown>) => {
-        const model = (value as Function).call(target, modelParams) as object;
+        const model = (value as ProxiedMethod).call(target, modelParams) as object;
         const modelName = modelParams['model'] as string ?? 'gemini-1.5-flash';
         return wrapGeminiModel(model, modelName, engine);
       };
@@ -232,7 +235,7 @@ function wrapGeminiModel(model: object, modelName: string, engine: TrimwareEngin
         return async (content: unknown) => {
           const request = normalizeGeminiParams(content, modelName);
           return engine.intercept(request, async () => {
-            return (value as Function).call(target, content) as Promise<RawSdkResult>;
+            return (value as ProxiedMethod).call(target, content) as Promise<RawSdkResult>;
           }, false);
         };
       }
@@ -240,7 +243,7 @@ function wrapGeminiModel(model: object, modelName: string, engine: TrimwareEngin
       // Wrap startChat to intercept sendMessage
       if (prop === 'startChat') {
         return (chatParams: unknown) => {
-          const chat = (value as Function).call(target, chatParams) as object;
+          const chat = (value as ProxiedMethod).call(target, chatParams) as object;
           return wrapGeminiChat(chat, modelName, engine);
         };
       }
@@ -259,7 +262,7 @@ function wrapGeminiChat(chat: object, modelName: string, engine: TrimwareEngine)
       return async (content: unknown) => {
         const request = normalizeGeminiParams(content, modelName);
         return engine.intercept(request, async () => {
-          return (value as Function).call(target, content) as Promise<RawSdkResult>;
+          return (value as ProxiedMethod).call(target, content) as Promise<RawSdkResult>;
         }, false);
       };
     },
@@ -531,7 +534,7 @@ function recordStreamingCacheHit(
  *
  * @example
  * ```ts
- * import { trimwares } from '@tthbfo2/llm-cost-trimmer';
+ * import { trimwares } from '@trimwares/trace';
  * import OpenAI from 'openai';
  *
  * const openai = trimwares.openai(new OpenAI());

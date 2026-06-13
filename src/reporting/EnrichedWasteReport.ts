@@ -23,10 +23,9 @@ export function buildEnrichedWasteReport(
   let toolSchemaCost    = 0; let toolSchemaTokens    = 0;
   let ragChunkCost      = 0; let ragChunkTokens      = 0;
   let historyCost       = 0; let historyTokens       = 0;
-  let systemPromptCost  = 0; let systemPromptTokens  = 0;
+  let systemPromptCost  = 0;
   let userQueryCost     = 0; let userQueryTokens     = 0;
   let outputCost        = 0; let outputTokens        = 0;
-  let totalInputTokens  = 0;
 
   for (const e of entries) {
     if (e.cached) continue;  // cached entries already at $0, skip for waste calc
@@ -34,10 +33,9 @@ export function buildEnrichedWasteReport(
     toolSchemaCost   += a.toolSchemas.estimatedCost;   toolSchemaTokens   += a.toolSchemas.tokens;
     ragChunkCost     += a.ragChunks.estimatedCost;     ragChunkTokens     += a.ragChunks.tokens;
     historyCost      += a.conversationHistory.estimatedCost; historyTokens += a.conversationHistory.tokens;
-    systemPromptCost += a.systemPrompt.estimatedCost;  systemPromptTokens += a.systemPrompt.tokens;
+    systemPromptCost += a.systemPrompt.estimatedCost;
     userQueryCost    += a.userQuery.estimatedCost;     userQueryTokens    += a.userQuery.tokens;
     outputCost       += a.outputTokens.estimatedCost;  outputTokens       += a.outputTokens.tokens;
-    totalInputTokens += a.totalInputTokens;
   }
 
   // ── Overpowered model heuristic ───────────────────────────────────────────
