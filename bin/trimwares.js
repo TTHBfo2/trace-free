@@ -202,7 +202,7 @@ if (command === 'serve') {
   function groupHistoryByDay(entries) {
     const byDay = {};
     for (const e of entries) {
-      const day = e.timestamp?.split('T')[0];
+      const day = new Date(e.timestamp).toISOString().split('T')[0];
       if (!day) continue;
       if (!byDay[day]) byDay[day] = { date: day, spend: 0, requests: 0, saved: 0 };
       byDay[day].spend    += e.attribution?.totalCost ?? 0;
@@ -317,6 +317,18 @@ if (command === 'serve') {
   // ── HTTP server ───────────────────────────────────────────────────────────────
 
   const server = createServer((req, res) => {
+    try {
+      handleRequest(req, res);
+    } catch (err) {
+      console.error('Request handler error:', err);
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        res.end('Internal server error');
+      }
+    }
+  });
+
+  function handleRequest(req, res) {
     res.setHeader('Access-Control-Allow-Origin', 'http://localhost:7777');
 
     if (req.url === '/api/data') {
@@ -366,7 +378,7 @@ if (command === 'serve') {
       res.writeHead(404);
       res.end('Not found');
     }
-  });
+  }
 
   server.listen(PORT, '127.0.0.1', () => {
     const url = `http://localhost:${PORT}`;
