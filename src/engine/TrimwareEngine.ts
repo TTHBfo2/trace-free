@@ -170,7 +170,7 @@ export class TrimwareEngine {
     // 8. Extract usage from raw response
     const usage = extractUsage(rawResponse, request, this);
     const pricing = this.costEngine.getPricing(resolvedModel);
-    const cost    = this.costEngine.computeCost(usage.inputTokens, usage.outputTokens, pricing);
+    const cost    = this.costEngine.computeCost(usage.inputTokens, usage.outputTokens, pricing, usage.nativeCachedTokens);
 
     // 9. Store in caches (only if not streaming — streaming responses are cached post-completion)
     if (!isStreaming) {
@@ -180,7 +180,7 @@ export class TrimwareEngine {
     }
 
     // 10. Record cost + attribution
-    this.costEngine.record({ requestId, provider: this.provider, model: resolvedModel, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cached: false, cacheType: 'none', latencyMs, request, savings: 0 });
+    this.costEngine.record({ requestId, provider: this.provider, model: resolvedModel, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cached: false, cacheType: 'none', latencyMs, request, savings: 0, nativeCachedTokens: usage.nativeCachedTokens });
     this.logSession(requestId, resolvedModel, usage.inputTokens, usage.outputTokens, request, false, 'none', latencyMs, nativeCache);
 
     return rawResponse;
@@ -256,33 +256,41 @@ export interface RawSdkResult {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function extractUsage(raw: RawSdkResult, request: LLMRequest, engine: TrimwareEngine): { inputTokens: number; outputTokens: number } {
+function extractUsage(raw: RawSdkResult, request: LLMRequest, engine: TrimwareEngine): { inputTokens: number; outputTokens: number; nativeCachedTokens: number } {
   // OpenAI / Groq format
   const usage = raw['usage'] as Record<string, number> | undefined;
   if (usage?.['prompt_tokens']) {
-    return { inputTokens: usage['prompt_tokens'], outputTokens: usage['completion_tokens'] ?? 0 };
+    return { inputTokens: usage['prompt_tokens'], outputTokens: usage['completion_tokens'] ?? 0, nativeCachedTokens: 0 };
   }
-  // Anthropic format
+  // Anthropic format — cache_creation_input_tokens are billed at full input
+  // rate (folded into inputTokens); cache_read_input_tokens are billed at the
+  // discounted cachedInputPerMillion rate.
   if (usage?.['input_tokens']) {
-    return { inputTokens: usage['input_tokens'], outputTokens: usage['output_tokens'] ?? 0 };
+    const cacheWriteTokens = usage['cache_creation_input_tokens'] ?? 0;
+    const cacheReadTokens  = usage['cache_read_input_tokens'] ?? 0;
+    return {
+      inputTokens: usage['input_tokens'] + cacheWriteTokens,
+      outputTokens: usage['output_tokens'] ?? 0,
+      nativeCachedTokens: cacheReadTokens,
+    };
   }
   // Gemini / unknown: estimate
   const counter = engine.attributor;
   const inputTokens  = (counter as unknown as { counter: { countMessages: (m: LLMRequest['messages']) => number } }).counter?.countMessages?.(request.messages) ?? 100;
   const outputTokens = Math.ceil(inputTokens * 0.2);
-  return { inputTokens, outputTokens };
+  return { inputTokens, outputTokens, nativeCachedTokens: 0 };
 }
 
 function buildCacheEntry(
   raw: RawSdkResult, model: string, provider: ProviderName,
   requestId: string, latencyMs: number, cost: number,
-  usage: { inputTokens: number; outputTokens: number }
+  usage: { inputTokens: number; outputTokens: number; nativeCachedTokens: number }
 ): Record<string, unknown> {
   return {
     content: extractContent(raw),
     model,
     provider,
-    usage: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cachedTokens: 0, totalTokens: usage.inputTokens + usage.outputTokens },
+    usage: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cachedTokens: usage.nativeCachedTokens, totalTokens: usage.inputTokens + usage.outputTokens },
     cost, savings: 0, cached: false, cacheType: 'none' as CacheType,
     requestId, latencyMs,
     _rawResponse: raw, // stored so cache hits can return the original format

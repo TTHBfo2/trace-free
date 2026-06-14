@@ -18,12 +18,12 @@ const DEFAULT_PRICING: Record<string, ModelPricing> = {
   'gpt-4o-mini':          { inputPerMillion: 0.15,  outputPerMillion: 0.60  },
   'gpt-4-turbo':          { inputPerMillion: 10.00, outputPerMillion: 30.00 },
   'gpt-3.5-turbo':        { inputPerMillion: 0.50,  outputPerMillion: 1.50  },
-  // Anthropic
-  'claude-opus-4-7':      { inputPerMillion: 5.00,  outputPerMillion: 25.00 },
-  'claude-sonnet-4-6':    { inputPerMillion: 3.00,  outputPerMillion: 15.00 },
-  'claude-haiku-4-5':     { inputPerMillion: 1.00,  outputPerMillion: 5.00  },
-  'claude-3-5-sonnet':    { inputPerMillion: 3.00,  outputPerMillion: 15.00 },
-  'claude-3-5-haiku':     { inputPerMillion: 0.80,  outputPerMillion: 4.00  },
+  // Anthropic — cachedInputPerMillion is the cache-read rate (10% of input price)
+  'claude-opus-4-7':      { inputPerMillion: 5.00,  outputPerMillion: 25.00, cachedInputPerMillion: 0.50 },
+  'claude-sonnet-4-6':    { inputPerMillion: 3.00,  outputPerMillion: 15.00, cachedInputPerMillion: 0.30 },
+  'claude-haiku-4-5':     { inputPerMillion: 1.00,  outputPerMillion: 5.00,  cachedInputPerMillion: 0.10 },
+  'claude-3-5-sonnet':    { inputPerMillion: 3.00,  outputPerMillion: 15.00, cachedInputPerMillion: 0.30 },
+  'claude-3-5-haiku':     { inputPerMillion: 0.80,  outputPerMillion: 4.00,  cachedInputPerMillion: 0.08 },
   // Gemini
   'gemini-1.5-pro':       { inputPerMillion: 1.25,  outputPerMillion: 5.00  },
   'gemini-1.5-flash':     { inputPerMillion: 0.075, outputPerMillion: 0.30  },
@@ -65,11 +65,20 @@ export class CostEngine {
     latencyMs: number;
     request: LLMRequest;
     savings?: number;
+    nativeCachedTokens?: number;
   }): CostEntry {
-    const { requestId, provider, model, inputTokens, outputTokens, cached, cacheType, latencyMs, request, savings = 0 } = params;
+    const { requestId, provider, model, inputTokens, outputTokens, cached, cacheType, latencyMs, request, savings = 0, nativeCachedTokens = 0 } = params;
 
     const pricing = this.getPricing(model);
-    const cost = cached ? 0 : this.computeCost(inputTokens, outputTokens, pricing);
+    const cost = cached ? 0 : this.computeCost(inputTokens, outputTokens, pricing, nativeCachedTokens);
+
+    // Provider-native prompt caching (e.g. Anthropic cache_control) bills cache
+    // reads at a fraction of the normal input rate — the difference is savings
+    // already realized on this live call.
+    const cachedRate    = pricing.cachedInputPerMillion ?? pricing.inputPerMillion;
+    const nativeCacheSavings = cached ? 0 : (nativeCachedTokens / 1_000_000) * (pricing.inputPerMillion - cachedRate);
+    const totalSavings = savings + nativeCacheSavings;
+
     const cheapestPerToken = this.cheapestInputCostPerToken();
 
     const partial: Omit<CostEntry, 'wasteFlags'> = {
@@ -80,7 +89,7 @@ export class CostEngine {
       inputTokens,
       outputTokens,
       cost,
-      savings,
+      savings: totalSavings,
       cached,
       cacheType,
       latencyMs,
@@ -108,9 +117,11 @@ export class CostEngine {
     return this.pricing['gpt-4o'] ?? { inputPerMillion: 2.50, outputPerMillion: 10.00 };
   }
 
-  computeCost(inputTokens: number, outputTokens: number, pricing: ModelPricing): number {
+  computeCost(inputTokens: number, outputTokens: number, pricing: ModelPricing, cachedTokens = 0): number {
+    const cachedRate = pricing.cachedInputPerMillion ?? pricing.inputPerMillion;
     return (
       (inputTokens / 1_000_000) * pricing.inputPerMillion +
+      (cachedTokens / 1_000_000) * cachedRate +
       (outputTokens / 1_000_000) * pricing.outputPerMillion
     );
   }
