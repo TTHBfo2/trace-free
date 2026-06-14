@@ -122,8 +122,8 @@ export class LLMCostTrimmer {
       const hit = this.responseCache.get(req);
       if (hit) {
         const latencyMs = Date.now() - startMs;
-        this.costEngine.record({ requestId, provider, model: hit.model, inputTokens: hit.usage.inputTokens, outputTokens: hit.usage.outputTokens, cached: true, cacheType: 'response', latencyMs, request, savings: hit.cost });
-        this.recordToLog(requestId, provider, hit.model, hit.usage.inputTokens, hit.usage.outputTokens, req, true, 'response', latencyMs, false);
+        const entry = this.costEngine.record({ requestId, provider, model: hit.model, inputTokens: hit.usage.inputTokens, outputTokens: hit.usage.outputTokens, cached: true, cacheType: 'response', latencyMs, request, savings: hit.cost });
+        this.recordToLog(requestId, provider, hit.model, hit.usage.inputTokens, hit.usage.outputTokens, req, true, 'response', latencyMs, false, entry, 0);
         return { ...hit, requestId, cached: true, cacheType: 'response', savings: hit.cost, cost: 0, latencyMs };
       }
     }
@@ -134,8 +134,8 @@ export class LLMCostTrimmer {
       const hit = this.semanticCache.get(req);
       if (hit) {
         const latencyMs = Date.now() - startMs;
-        this.costEngine.record({ requestId, provider, model: hit.model, inputTokens: hit.usage.inputTokens, outputTokens: hit.usage.outputTokens, cached: true, cacheType: 'semantic', latencyMs, request, savings: hit.cost });
-        this.recordToLog(requestId, provider, hit.model, hit.usage.inputTokens, hit.usage.outputTokens, req, true, 'semantic', latencyMs, false);
+        const entry = this.costEngine.record({ requestId, provider, model: hit.model, inputTokens: hit.usage.inputTokens, outputTokens: hit.usage.outputTokens, cached: true, cacheType: 'semantic', latencyMs, request, savings: hit.cost });
+        this.recordToLog(requestId, provider, hit.model, hit.usage.inputTokens, hit.usage.outputTokens, req, true, 'semantic', latencyMs, false, entry, 0);
         return { ...hit, requestId, cached: true, cacheType: 'semantic', savings: hit.cost, cost: 0, latencyMs };
       }
     }
@@ -184,23 +184,24 @@ export class LLMCostTrimmer {
       raw = await this.provider.send(optimizedReq);
     }
 
-    const latencyMs = Date.now() - startMs;
-    const pricing   = this.costEngine.getPricing(raw.model);
-    const cost      = this.costEngine.computeCost(raw.inputTokens, raw.outputTokens, pricing);
+    const latencyMs        = Date.now() - startMs;
+    const pricing          = this.costEngine.getPricing(raw.model);
+    const nativeCachedTokens = raw.cachedTokens ?? 0;
+    const cost             = this.costEngine.computeCost(raw.inputTokens, raw.outputTokens, pricing, nativeCachedTokens);
 
     const response        = this.provider.buildResponse(raw, requestId, latencyMs, cost, 0, false, 'none');
     response.provider     = resolvedProvider;
-    response.usage.cachedTokens = raw.cachedTokens ?? 0;
+    response.usage.cachedTokens = nativeCachedTokens;
 
     // 7. Store in caches
     this.responseCache.set(request, response);
     this.semanticCache.set(request, response);
 
     // 8. Record cost
-    this.costEngine.record({ requestId, provider: resolvedProvider, model: raw.model, inputTokens: raw.inputTokens, outputTokens: raw.outputTokens, cached: false, cacheType: 'none', latencyMs, request, savings: 0 });
+    const entry = this.costEngine.record({ requestId, provider: resolvedProvider, model: raw.model, inputTokens: raw.inputTokens, outputTokens: raw.outputTokens, cached: false, cacheType: 'none', latencyMs, request, savings: 0, nativeCachedTokens });
 
     // 9. Log session entry (metadata only)
-    this.recordToLog(requestId, resolvedProvider, raw.model, raw.inputTokens, raw.outputTokens, request, false, 'none', latencyMs, nativeCacheApplied);
+    this.recordToLog(requestId, resolvedProvider, raw.model, raw.inputTokens, raw.outputTokens, request, false, 'none', latencyMs, nativeCacheApplied, entry, nativeCachedTokens);
 
     return response;
   }
@@ -258,12 +259,17 @@ export class LLMCostTrimmer {
 
   private recordToLog(
     requestId: string, provider: ProviderName, model: string,
-    _inputTokens: number, outputTokens: number,
+    inputTokens: number, outputTokens: number,
     request: LLMRequest, cached: boolean, cacheType: string,
-    latencyMs: number, nativeCache: boolean
+    latencyMs: number, nativeCache: boolean,
+    costEntry: import('./types/index.js').CostEntry, nativeCachedTokens: number
   ): void {
     const pricing     = this.costEngine.getPricing(model);
     const attribution = this.attributor.attribute(request, outputTokens, pricing);
-    this.sessionLog.write({ timestamp: Date.now(), requestId, provider, model, attribution, cached, cacheType, latencyMs, nativeCache });
+    this.sessionLog.write({
+      timestamp: Date.now(), requestId, provider, model, attribution, cached, cacheType, latencyMs, nativeCache,
+      realInputTokens: inputTokens, realOutputTokens: outputTokens,
+      nativeCachedTokens, realCost: costEntry.cost, realSavings: costEntry.savings,
+    });
   }
 }

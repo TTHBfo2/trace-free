@@ -52,6 +52,13 @@ export interface SessionLogEntry {
   cacheType: string;
   latencyMs: number;
   nativeCache: boolean;          // whether provider-native caching was applied
+  // Real billed numbers from CostEngine — derived from actual provider
+  // usage tokens, not the heuristic character-count attribution above.
+  realInputTokens: number;
+  realOutputTokens: number;
+  nativeCachedTokens: number;    // cache_read_input_tokens (or equivalent), billed at the discounted rate
+  realCost: number;              // actual cost of this request (0 if served from response cache)
+  realSavings: number;           // cost avoided: full cost if response-cache hit, else native-cache discount
 }
 
 // ─── Provider ─────────────────────────────────────────────────────────────────

@@ -105,8 +105,8 @@ export class TrimwareEngine {
     const cacheHit = this.responseCache.get(request);
     if (cacheHit) {
       const latencyMs = Date.now() - startMs;
-      this.costEngine.record({ requestId, provider: this.provider, model: cacheHit.model, inputTokens: cacheHit.usage.inputTokens, outputTokens: cacheHit.usage.outputTokens, cached: true, cacheType: 'response', latencyMs, request, savings: cacheHit.cost });
-      this.logSession(requestId, cacheHit.model, cacheHit.usage.inputTokens, cacheHit.usage.outputTokens, request, true, 'response', latencyMs, false);
+      const entry = this.costEngine.record({ requestId, provider: this.provider, model: cacheHit.model, inputTokens: cacheHit.usage.inputTokens, outputTokens: cacheHit.usage.outputTokens, cached: true, cacheType: 'response', latencyMs, request, savings: cacheHit.cost });
+      this.logSession(requestId, cacheHit.model, cacheHit.usage.inputTokens, cacheHit.usage.outputTokens, request, true, 'response', latencyMs, false, entry, 0);
       return (cacheHit as unknown as { _rawResponse: RawSdkResult })._rawResponse;
     }
 
@@ -118,8 +118,8 @@ export class TrimwareEngine {
       const semanticHit = this.semanticCache.get(request);
       if (semanticHit) {
         const latencyMs = Date.now() - startMs;
-        this.costEngine.record({ requestId, provider: this.provider, model: semanticHit.model, inputTokens: semanticHit.usage.inputTokens, outputTokens: semanticHit.usage.outputTokens, cached: true, cacheType: 'semantic', latencyMs, request, savings: semanticHit.cost });
-        this.logSession(requestId, semanticHit.model, semanticHit.usage.inputTokens, semanticHit.usage.outputTokens, request, true, 'semantic', latencyMs, false);
+        const entry = this.costEngine.record({ requestId, provider: this.provider, model: semanticHit.model, inputTokens: semanticHit.usage.inputTokens, outputTokens: semanticHit.usage.outputTokens, cached: true, cacheType: 'semantic', latencyMs, request, savings: semanticHit.cost });
+        this.logSession(requestId, semanticHit.model, semanticHit.usage.inputTokens, semanticHit.usage.outputTokens, request, true, 'semantic', latencyMs, false, entry, 0);
         return (semanticHit as unknown as { _rawResponse: RawSdkResult })._rawResponse;
       }
     }
@@ -180,8 +180,8 @@ export class TrimwareEngine {
     }
 
     // 10. Record cost + attribution
-    this.costEngine.record({ requestId, provider: this.provider, model: resolvedModel, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cached: false, cacheType: 'none', latencyMs, request, savings: 0, nativeCachedTokens: usage.nativeCachedTokens });
-    this.logSession(requestId, resolvedModel, usage.inputTokens, usage.outputTokens, request, false, 'none', latencyMs, nativeCache);
+    const entry = this.costEngine.record({ requestId, provider: this.provider, model: resolvedModel, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cached: false, cacheType: 'none', latencyMs, request, savings: 0, nativeCachedTokens: usage.nativeCachedTokens });
+    this.logSession(requestId, resolvedModel, usage.inputTokens, usage.outputTokens, request, false, 'none', latencyMs, nativeCache, entry, usage.nativeCachedTokens);
 
     return rawResponse;
   }
@@ -238,13 +238,19 @@ export class TrimwareEngine {
 
   private logSession(
     requestId: string, model: string,
-    _inputTokens: number, outputTokens: number,
+    inputTokens: number, outputTokens: number,
     request: LLMRequest, cached: boolean, cacheType: string,
-    latencyMs: number, nativeCache: boolean
+    latencyMs: number, nativeCache: boolean,
+    costEntry: import('../types/index.js').CostEntry, nativeCachedTokens: number
   ): void {
     const pricing     = this.costEngine.getPricing(model);
     const attribution = this.attributor.attribute(request, outputTokens, pricing);
-    this.sessionLog.write({ timestamp: Date.now(), requestId, provider: this.provider, model, attribution, cached, cacheType, latencyMs, nativeCache });
+    this.sessionLog.write({
+      timestamp: Date.now(), requestId, provider: this.provider, model, attribution,
+      cached, cacheType, latencyMs, nativeCache,
+      realInputTokens: inputTokens, realOutputTokens: outputTokens,
+      nativeCachedTokens, realCost: costEntry.cost, realSavings: costEntry.savings,
+    });
   }
 }
 

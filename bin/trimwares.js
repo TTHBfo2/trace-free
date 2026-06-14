@@ -205,9 +205,9 @@ if (command === 'serve') {
       const day = new Date(e.timestamp).toISOString().split('T')[0];
       if (!day) continue;
       if (!byDay[day]) byDay[day] = { date: day, spend: 0, requests: 0, saved: 0 };
-      byDay[day].spend    += e.attribution?.totalCost ?? 0;
+      byDay[day].spend    += realCostOf(e);
       byDay[day].requests += 1;
-      if (e.cached) byDay[day].saved += e.attribution?.totalCost ?? 0;
+      byDay[day].saved    += realSavingsOf(e);
     }
     const days = Object.values(byDay).sort((a, b) => a.date.localeCompare(b.date));
     const spend30d    = days.reduce((s, d) => s + d.spend, 0);
@@ -234,37 +234,56 @@ if (command === 'serve') {
     } catch { return null; }
   }
 
+  // realCost/realSavings come from CostEngine (actual provider usage tokens).
+  // Older log entries written before this field existed fall back to the
+  // heuristic attribution.totalCost so the dashboard doesn't break on stale data.
+  function realCostOf(e)    { return e.realCost    ?? e.attribution.totalCost; }
+  function realSavingsOf(e) { return e.realSavings ?? (e.cached ? e.attribution.totalCost : 0); }
+
   function deriveWasteReport(entries) {
     if (!entries.length) return {
       totalGrossSpend: 0, alreadySaved: 0, currentSpend: 0,
       recoverableSpend: 0, recoverablePercent: 0, categories: [], topFix: null, sessionRequests: 0,
     };
     let toolSchemaCost = 0, ragChunkCost = 0, historyCost = 0;
-    let systemPromptCost = 0, userQueryCost = 0, outputCost = 0, alreadySaved = 0;
+    let systemPromptCost = 0, userQueryCost = 0, outputCost = 0;
+    let systemPromptCostUncached = 0;
+    let responseCacheSavings = 0, nativeCacheSavings = 0;
     for (const e of entries) {
-      if (e.cached) { alreadySaved += e.attribution.totalCost; continue; }
+      if (e.cached) { responseCacheSavings += realSavingsOf(e); continue; }
       const a = e.attribution;
-      toolSchemaCost   += a.toolSchemas.estimatedCost;
-      ragChunkCost     += a.ragChunks.estimatedCost;
-      historyCost      += a.conversationHistory.estimatedCost;
-      systemPromptCost += a.systemPrompt.estimatedCost;
-      userQueryCost    += a.userQuery.estimatedCost;
-      outputCost       += a.outputTokens.estimatedCost;
+      const heuristicTotal = a.totalCost || 1;
+      // Scale the heuristic per-category split onto the real billed cost for
+      // this request, so category dollar amounts sum to actual spend.
+      const k = realCostOf(e) / heuristicTotal;
+      toolSchemaCost   += a.toolSchemas.estimatedCost * k;
+      ragChunkCost     += a.ragChunks.estimatedCost * k;
+      historyCost      += a.conversationHistory.estimatedCost * k;
+      systemPromptCost += a.systemPrompt.estimatedCost * k;
+      userQueryCost    += a.userQuery.estimatedCost * k;
+      outputCost       += a.outputTokens.estimatedCost * k;
+      if (!e.nativeCache) systemPromptCostUncached += a.systemPrompt.estimatedCost * k;
+      nativeCacheSavings += realSavingsOf(e);
     }
     const currentSpend    = toolSchemaCost + ragChunkCost + historyCost + systemPromptCost + userQueryCost + outputCost;
+    const alreadySaved    = responseCacheSavings + nativeCacheSavings;
     const totalGrossSpend = currentSpend + alreadySaved;
     const gross           = totalGrossSpend || 1;
     const pct             = c => parseFloat(((c / gross) * 100).toFixed(1));
     const rTool    = toolSchemaCost   * 0.90;
     const rRAG     = ragChunkCost     * 0.90;
     const rHistory = historyCost      * 0.65;
-    const rSystem  = systemPromptCost * 0.85;
+    // Only the portion of system-prompt spend NOT already covered by
+    // provider-native caching is "recoverable" — the rest is already saved
+    // and reflected in nativeCacheSavings below.
+    const rSystem  = systemPromptCostUncached * 0.85;
     const cats = [
       { label: 'Unused tool schemas',        cost: toolSchemaCost,   percentOfSpend: pct(toolSchemaCost),   severity: toolSchemaCost > currentSpend * 0.10 ? 'critical' : 'warning', fixDescription: 'Cache tool schema prefix or filter per-step',            projectedMonthlySaving: rTool    * 30 },
       { label: 'Redundant RAG chunks',       cost: ragChunkCost,     percentOfSpend: pct(ragChunkCost),     severity: ragChunkCost > currentSpend * 0.15 ? 'critical' : ragChunkCost > 0 ? 'warning' : 'info', fixDescription: 'Provider-native prefix caching on stable docs', projectedMonthlySaving: rRAG     * 30 },
       { label: 'Stale conversation history', cost: historyCost,      percentOfSpend: pct(historyCost),      severity: historyCost > currentSpend * 0.15 ? 'warning' : 'info',     fixDescription: 'maxHistoryTurns: 10 rolling window',                     projectedMonthlySaving: rHistory * 30 },
-      { label: 'System prompts (cacheable)', cost: systemPromptCost, percentOfSpend: pct(systemPromptCost), severity: systemPromptCost > currentSpend * 0.20 ? 'warning' : 'info', fixDescription: 'Anthropic cache_control on stable instructions',         projectedMonthlySaving: rSystem  * 30 },
-      { label: 'Repeated prompts ✓ saved', cost: alreadySaved,  percentOfSpend: pct(alreadySaved),     severity: 'good', fixDescription: 'Response cache active — identical questions at $0' },
+      { label: 'System prompts', cost: systemPromptCost, percentOfSpend: pct(systemPromptCost), severity: systemPromptCostUncached > currentSpend * 0.20 ? 'warning' : systemPromptCostUncached > 0 ? 'info' : 'good', fixDescription: systemPromptCostUncached > 0 ? 'Anthropic cache_control on stable instructions' : 'Already covered by provider-native caching', projectedMonthlySaving: rSystem  * 30 },
+      { label: 'Repeated prompts ✓ saved',   cost: responseCacheSavings, percentOfSpend: pct(responseCacheSavings), severity: 'good', fixDescription: 'Response cache active — identical questions at $0' },
+      { label: 'Native prompt caching ✓ active', cost: nativeCacheSavings, percentOfSpend: pct(nativeCacheSavings), severity: 'good', fixDescription: 'Provider-side prompt cache is discounting repeated context' },
       { label: 'Genuine work',               cost: userQueryCost + outputCost, percentOfSpend: pct(userQueryCost + outputCost), severity: 'good', fixDescription: 'User queries + output — cannot be reduced' },
     ].filter(c => c.cost > 0);
     const topFix = [...cats]
@@ -291,14 +310,23 @@ if (command === 'serve') {
   }
 
   function aggregateSessionCost(entries) {
-    let totalCost = 0; let cached = 0;
+    let totalCost = 0, totalSaved = 0;
+    let responseCacheHits = 0, nativeCacheHits = 0;
     const byModel = {};
     for (const e of entries) {
-      totalCost += e.attribution.totalCost;
-      if (e.cached) cached++;
-      byModel[e.model] = (byModel[e.model] ?? 0) + e.attribution.totalCost;
+      const cost = realCostOf(e);
+      totalCost  += cost;
+      totalSaved += realSavingsOf(e);
+      if (e.cached) responseCacheHits++;
+      if (e.nativeCache) nativeCacheHits++;
+      byModel[e.model] = (byModel[e.model] ?? 0) + cost;
     }
-    return { totalCost, totalSaved: 0, cacheHitRate: entries.length > 0 ? (cached / entries.length) * 100 : 0, byModel };
+    return {
+      totalCost, totalSaved,
+      cacheHitRate: entries.length > 0 ? (responseCacheHits / entries.length) * 100 : 0,
+      nativeCacheHitRate: entries.length > 0 ? (nativeCacheHits / entries.length) * 100 : 0,
+      byModel,
+    };
   }
 
   // ── MIME types ────────────────────────────────────────────────────────────────

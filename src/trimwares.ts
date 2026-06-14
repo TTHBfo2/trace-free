@@ -374,10 +374,12 @@ async function* wrapOpenAIStream(
     _rawResponse: { choices: [{ message: { content: fullContent } }] },
   };
   engine.responseCache.set(request, responseForCache as unknown as import('./types/index.js').LLMResponse);
-  engine.costEngine.record({ requestId, provider: engine.provider, model, inputTokens, outputTokens, cached: false, cacheType: 'none', latencyMs, request, savings: 0 });
+  const entry = engine.costEngine.record({ requestId, provider: engine.provider, model, inputTokens, outputTokens, cached: false, cacheType: 'none', latencyMs, request, savings: 0 });
   engine.sessionLog.write({
     timestamp: Date.now(), requestId, provider: engine.provider, model,
     attribution, cached: false, cacheType: 'none', latencyMs, nativeCache: false,
+    realInputTokens: inputTokens, realOutputTokens: outputTokens,
+    nativeCachedTokens: 0, realCost: entry.cost, realSavings: entry.savings,
   });
 }
 
@@ -391,6 +393,8 @@ async function* wrapAnthropicStream(
   let model = request.model ?? '';
   let inputTokens = 0;
   let outputTokens = 0;
+  let cacheReadTokens = 0;
+  let cacheWriteTokens = 0;
   const requestId = generateRequestId();
 
   for await (const chunk of stream) {
@@ -403,7 +407,11 @@ async function* wrapAnthropicStream(
       const msg = c['message'] as Record<string, unknown>;
       model = msg?.['model'] as string ?? model;
       const usage = msg?.['usage'] as Record<string, number>;
-      if (usage) { inputTokens = usage['input_tokens'] ?? 0; }
+      if (usage) {
+        inputTokens      = usage['input_tokens'] ?? 0;
+        cacheReadTokens  = usage['cache_read_input_tokens'] ?? 0;
+        cacheWriteTokens = usage['cache_creation_input_tokens'] ?? 0;
+      }
     }
     if (c['type'] === 'message_delta') {
       const usage = c['usage'] as Record<string, number>;
@@ -420,19 +428,24 @@ async function* wrapAnthropicStream(
   if (inputTokens === 0) inputTokens   = attribution.totalInputTokens;
   if (outputTokens === 0) outputTokens = attribution.totalOutputTokens;
 
-  const cost = engine.costEngine.computeCost(inputTokens, outputTokens, pricing);
+  // cache_creation_input_tokens are billed at the full input rate (folded into
+  // inputTokens); cache_read_input_tokens get the discounted cachedInputPerMillion rate.
+  const totalInputTokens = inputTokens + cacheWriteTokens;
+  const cost = engine.costEngine.computeCost(totalInputTokens, outputTokens, pricing, cacheReadTokens);
   const responseForCache = {
     content: fullContent, model, provider: engine.provider,
-    usage: { inputTokens, outputTokens, cachedTokens: 0, totalTokens: inputTokens + outputTokens },
+    usage: { inputTokens: totalInputTokens, outputTokens, cachedTokens: cacheReadTokens, totalTokens: totalInputTokens + outputTokens },
     cost, savings: 0, cached: false, cacheType: 'none' as const,
     requestId, latencyMs,
     _rawResponse: { content: [{ type: 'text', text: fullContent }] },
   };
   engine.responseCache.set(request, responseForCache as unknown as import('./types/index.js').LLMResponse);
-  engine.costEngine.record({ requestId, provider: engine.provider, model, inputTokens, outputTokens, cached: false, cacheType: 'none', latencyMs, request, savings: 0 });
+  const entry = engine.costEngine.record({ requestId, provider: engine.provider, model, inputTokens: totalInputTokens, outputTokens, cached: false, cacheType: 'none', latencyMs, request, savings: 0, nativeCachedTokens: cacheReadTokens });
   engine.sessionLog.write({
     timestamp: Date.now(), requestId, provider: engine.provider, model,
-    attribution, cached: false, cacheType: 'none', latencyMs, nativeCache: false,
+    attribution, cached: false, cacheType: 'none', latencyMs, nativeCache: cacheReadTokens > 0 || cacheWriteTokens > 0,
+    realInputTokens: totalInputTokens, realOutputTokens: outputTokens,
+    nativeCachedTokens: cacheReadTokens, realCost: entry.cost, realSavings: entry.savings,
   });
 }
 
@@ -511,7 +524,7 @@ function recordStreamingCacheHit(
 ): void {
   const requestId = generateRequestId();
   const latencyMs = Date.now() - startMs;
-  engine.costEngine.record({
+  const entry = engine.costEngine.record({
     requestId, provider: engine.provider, model: cacheHit.model,
     inputTokens: cacheHit.usage.inputTokens, outputTokens: cacheHit.usage.outputTokens,
     cached: true, cacheType: 'response', latencyMs, request, savings: cacheHit.cost,
@@ -520,6 +533,8 @@ function recordStreamingCacheHit(
     timestamp: Date.now(), requestId, provider: engine.provider, model: cacheHit.model,
     attribution: engine.attributor.attribute(request, cacheHit.usage.outputTokens, engine.costEngine.getPricing(cacheHit.model)),
     cached: true, cacheType: 'response', latencyMs, nativeCache: false,
+    realInputTokens: cacheHit.usage.inputTokens, realOutputTokens: cacheHit.usage.outputTokens,
+    nativeCachedTokens: 0, realCost: entry.cost, realSavings: entry.savings,
   });
 }
 
