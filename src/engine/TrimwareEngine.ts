@@ -153,11 +153,11 @@ export class TrimwareEngine {
     let resolvedModel = optimized.model ?? this.config.defaultModel;
     if ((this.config.optimization as { routeToCheapestModel?: boolean }).routeToCheapestModel !== false) {
       const decision = this.router.route(optimized, resolvedModel, this.provider);
-      if (decision.wasRouted) {
-        resolvedModel = decision.model;
-        optimized = { ...optimized, model: resolvedModel };
-      }
+      if (decision.wasRouted) resolvedModel = decision.model;
     }
+    // Always resolve the model that will actually be used — the cache
+    // optimizer needs it (Claude Haiku 4.5 has a different cache threshold).
+    optimized = { ...optimized, model: resolvedModel };
 
     // 6. Provider-native prompt caching
     const cacheOpt     = this.cacheOptimizer.optimize(optimized, this.provider);

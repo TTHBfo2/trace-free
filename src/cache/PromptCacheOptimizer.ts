@@ -5,10 +5,17 @@ import {
 } from '../types/index.js';
 import { TokenCounter } from '../core/TokenCounter.js';
 
-// Anthropic's hard minimum: the combined cached content must be ≥ 1,024 tokens
-// or the cache write silently does nothing.
-const ANTHROPIC_CACHE_MIN_TOKENS = 1024;
+// Anthropic's hard minimum: the combined cached content must meet this many
+// tokens or the cache write silently does nothing. Most Claude models require
+// 1,024 tokens, but Claude Haiku 4.5 requires 4,096 — see
+// https://docs.claude.com/en/docs/build-with-claude/prompt-caching
+const ANTHROPIC_CACHE_MIN_TOKENS        = 1024;
+const ANTHROPIC_CACHE_MIN_TOKENS_HAIKU45 = 4096;
 const OPENAI_CACHE_MIN_TOKENS    = 1024;
+
+function anthropicCacheMinTokens(model?: string): number {
+  return model?.startsWith('claude-haiku-4-5') ? ANTHROPIC_CACHE_MIN_TOKENS_HAIKU45 : ANTHROPIC_CACHE_MIN_TOKENS;
+}
 
 export class PromptCacheOptimizer {
   private counter: TokenCounter;
@@ -49,6 +56,8 @@ export class PromptCacheOptimizer {
     let cacheableTokens = 0;
     let breakpoints     = 0;
 
+    const minTokens = anthropicCacheMinTokens(request.model);
+
     // Combine all system messages into one consolidated block
     const combinedSystem = systemMsgs.map(m => m.content).join('\n\n');
     const combinedTokens = this.counter.countText(combinedSystem);
@@ -56,7 +65,7 @@ export class PromptCacheOptimizer {
     const systemBlocks: AnthropicSystemBlock[] = [];
 
     if (combinedSystem) {
-      const eligible = combinedTokens >= ANTHROPIC_CACHE_MIN_TOKENS && breakpoints < 4;
+      const eligible = combinedTokens >= minTokens && breakpoints < 4;
       systemBlocks.push({
         type: 'text',
         text: combinedSystem,
@@ -72,7 +81,7 @@ export class PromptCacheOptimizer {
 
       // Try combining tools + system if neither alone hits the threshold
       const combinedWithTools = combinedTokens + toolTokens;
-      if (toolTokens >= ANTHROPIC_CACHE_MIN_TOKENS) {
+      if (toolTokens >= minTokens) {
         // Tools alone are large enough — cache them separately
         cachedTools = request.tools.map((t, i) => ({
           ...t,
@@ -80,7 +89,7 @@ export class PromptCacheOptimizer {
         })) as LLMTool[];
         cacheableTokens += toolTokens;
         breakpoints++;
-      } else if (combinedWithTools >= ANTHROPIC_CACHE_MIN_TOKENS && systemBlocks.length > 0 && !systemBlocks[0].cache_control) {
+      } else if (combinedWithTools >= minTokens && systemBlocks.length > 0 && !systemBlocks[0].cache_control) {
         // System alone was < 1024, tools alone < 1024, but TOGETHER they exceed it.
         // Combine system+tools into the system block to hit the threshold.
         const merged = combinedSystem + '\n\n' + JSON.stringify(request.tools, null, 2);

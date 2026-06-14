@@ -108,7 +108,7 @@ The terminal report and dashboard show exactly how your spend splits across thes
 | Optimization | How it works | Verified saving |
 |---|---|---|
 | **Response cache** | Identical requests served from memory at $0 | Exactly = your repeat-request % |
-| **Native prompt caching** | Injects Anthropic `cache_control` on stable system prompt + tool prefixes | 90% on those token prefixes (≥ 1,024 tokens) |
+| **Native prompt caching** | Injects Anthropic `cache_control` on stable system prompt + tool prefixes | 90% on those token prefixes (≥ 1,024 tokens; **≥ 4,096 tokens for Claude Haiku 4.5**) |
 | **Tool schema filter** | Agents: only sends tools relevant to the current step | 5–15% per step |
 | **Model router** | Routes simple requests to the cheapest capable model in the same provider | **94% per routed call** (opt-in) |
 | **Context pruner** | Trims low-relevance history turns from long conversations | Configurable (opt-in) |
@@ -124,8 +124,8 @@ The terminal report and dashboard show exactly how your spend splits across thes
 | Provider | Status |
 |---|---|
 | OpenAI (GPT-4o, GPT-4o-mini, GPT-4-turbo) | ✓ Implemented · unit-tested |
-| Anthropic (Claude Opus, Sonnet, Haiku) | ✓ Implemented · unit-tested |
-| Groq (LLaMA 3.3 70B, LLaMA 3.1 8B, Mixtral) | ✓ Implemented · **live-tested** (15/15, 2026-06-03) |
+| Anthropic (Claude Opus, Sonnet, Haiku) | ✓ Implemented · **live-tested** (2026-06-14) |
+| Groq (LLaMA 3.3 70B, LLaMA 3.1 8B, Mixtral) | ✓ Implemented · **live-tested** (2026-06-14) |
 | Google Gemini (1.5 Pro, 1.5 Flash, 2.0 Flash) | ✓ Implemented · unit-tested |
 | Ollama (any local model) | ✓ Implemented · unit-tested |
 
