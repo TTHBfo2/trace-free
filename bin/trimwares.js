@@ -313,20 +313,44 @@ if (command === 'serve') {
     let totalCost = 0, totalSaved = 0;
     let responseCacheHits = 0, nativeCacheHits = 0;
     const byModel = {};
+    const byProvider = {};
     for (const e of entries) {
       const cost = realCostOf(e);
       totalCost  += cost;
       totalSaved += realSavingsOf(e);
       if (e.cached) responseCacheHits++;
-      if (e.nativeCache) nativeCacheHits++;
+      // Count only requests where the provider actually reported discounted
+      // cache-read tokens — not just "this prompt was large enough to be
+      // cacheable" (that's `e.nativeCache`, a predictive signal used for
+      // recommending cache_control, not a record of a discount applied).
+      if (e.nativeCachedTokens > 0) nativeCacheHits++;
       byModel[e.model] = (byModel[e.model] ?? 0) + cost;
+      byProvider[e.provider] = (byProvider[e.provider] ?? 0) + cost;
     }
     return {
       totalCost, totalSaved,
       cacheHitRate: entries.length > 0 ? (responseCacheHits / entries.length) * 100 : 0,
       nativeCacheHitRate: entries.length > 0 ? (nativeCacheHits / entries.length) * 100 : 0,
       byModel,
+      byProvider,
     };
+  }
+
+  function buildSessionLog(entries, limit = 50) {
+    return entries.slice(-limit).reverse().map(e => ({
+      timestamp:    e.timestamp,
+      requestId:    e.requestId,
+      provider:     e.provider,
+      model:        e.model,
+      cost:         realCostOf(e),
+      saved:        realSavingsOf(e),
+      cached:       e.cached,
+      cacheType:    e.cacheType,
+      nativeCache:  e.nativeCache,
+      latencyMs:    e.latencyMs,
+      inputTokens:  e.realInputTokens,
+      outputTokens: e.realOutputTokens,
+    }));
   }
 
   // ── MIME types ────────────────────────────────────────────────────────────────
@@ -364,6 +388,7 @@ if (command === 'serve') {
       const waste       = deriveWasteReport(entries);
       const sessionAgg  = aggregateSessionAttribution(entries);
       const sessionCost = aggregateSessionCost(entries);
+      const sessionLog  = buildSessionLog(entries);
       const scenarios   = loadLatestSimulation();
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify({
@@ -371,6 +396,7 @@ if (command === 'serve') {
         entryCount: entries.length,
         waste,
         attribution: { sessionAgg, sessionCost, scenarios },
+        sessionLog,
       }));
       return;
     }
