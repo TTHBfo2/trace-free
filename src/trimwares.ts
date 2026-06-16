@@ -132,9 +132,14 @@ function wrapOpenAICompatible<T extends object>(
                     recordStreamingCacheHit(engine, request, cacheHit, streamStart);
                     return buildFakeOpenAIStream(extractCachedContent(cacheHit));
                   }
-                  // Request usage data in the final chunk (OpenAI / Groq support this)
-                  const streamParams = { ...params, stream_options: { include_usage: true } };
+                  // Apply the same optimizations (tool filtering, model routing) that
+                  // non-streaming calls get via engine.intercept().
+                  const cacheOpt     = engine.cacheOptimizer.optimize(request, engine.provider);
+                  const sdkParams    = denormalizeOpenAIParams(params, { ...request, ...cacheOpt });
+                  const streamParams = { ...sdkParams, stream_options: { include_usage: true } };
                   const stream = await (compValue as ProxiedMethod).call(compTarget, streamParams) as AsyncIterable<unknown>;
+                  // Pass original `request` (not optimized) so response-cache key stays consistent
+                  // with what engine.responseCache.get(request) looks up on the next call.
                   return wrapOpenAIStream(stream, request, engine, streamStart);
                 }
 
@@ -184,7 +189,15 @@ function wrapAnthropic<T extends object>(client: T, config?: TrimmerConfig): Wra
                 recordStreamingCacheHit(engine, request, cacheHit, streamStart);
                 return buildFakeAnthropicStream(extractCachedContent(cacheHit));
               }
-              const stream = await (msgValue as ProxiedMethod).call(msgTarget, params) as AsyncIterable<unknown>;
+              // Apply cache_control injection (and any other pre-call optimizations) that
+              // non-streaming calls get via engine.intercept() / denormalizeAnthropicParams().
+              // Without this, Anthropic never sees cache_control blocks in streaming mode
+              // and cache_creation/read tokens are always 0.
+              const cacheOpt  = engine.cacheOptimizer.optimize(request, 'anthropic');
+              const sdkParams = denormalizeAnthropicParams(params, { ...request, ...cacheOpt }, engine);
+              const stream = await (msgValue as ProxiedMethod).call(msgTarget, sdkParams) as AsyncIterable<unknown>;
+              // Pass original `request` (not optimized) so response-cache key stays consistent
+              // with what engine.responseCache.get(request) looks up on the next call.
               return wrapAnthropicStream(stream, request, engine, streamStart);
             }
 
