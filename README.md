@@ -124,12 +124,23 @@ The terminal report and dashboard show exactly how your spend splits across thes
 | Provider | Status |
 |---|---|
 | OpenAI (GPT-4o, GPT-4o-mini, GPT-4-turbo) | ✓ Implemented · unit-tested |
-| Anthropic (Claude Opus, Sonnet, Haiku) | ✓ Implemented · **live-tested** (2026-06-14) |
-| Groq (LLaMA 3.3 70B, LLaMA 3.1 8B, Mixtral) | ✓ Implemented · **live-tested** (2026-06-14) |
+| Anthropic (Haiku 4.5, Sonnet 4.6, Opus 4.7) | ✓ Implemented · **live-tested** (2026-06-15) |
+| Groq (LLaMA 3.3 70B, LLaMA 3.1 8B, Mixtral) | ✓ Implemented · **live-tested** (2026-06-15) |
 | Google Gemini (1.5 Pro, 1.5 Flash, 2.0 Flash) | ✓ Implemented · unit-tested |
 | Ollama (any local model) | ✓ Implemented · unit-tested |
 
-Azure OpenAI, OpenRouter, and other OpenAI-compatible providers are not supported in v0.1.
+Azure OpenAI and OpenRouter are also supported — pass an OpenAI client configured with the appropriate `baseURL`:
+
+```ts
+import OpenAI from 'openai';
+import { trimwares } from '@trimwares/trace';
+
+// Azure OpenAI
+const azure = trimwares.azure(new OpenAI({ baseURL: '...', apiKey: '...' }));
+
+// OpenRouter
+const openrouter = trimwares.openrouter(new OpenAI({ baseURL: 'https://openrouter.ai/api/v1', apiKey: '...' }));
+```
 
 ---
 
@@ -191,8 +202,8 @@ Zero-config by default. All optimizations are on with conservative settings.
 ```ts
 const openai = trimwares.openai(new OpenAI(), {
   cache: {
-    response:  { ttlMs: 5 * 60 * 1000 },           // 5 min TTL (default)
-    heuristic: { similarityThreshold: 0.97 },       // conservative similarity match
+    response:  { ttlMs: 24 * 60 * 60 * 1000 },      // default: 24h TTL; lower for volatile prompts
+    semantic:  { similarityThreshold: 0.97 },       // conservative similarity match
     plan:      { enabled: false },                  // disable agent plan cache
   },
   optimization: {
