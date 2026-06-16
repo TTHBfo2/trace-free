@@ -63,7 +63,7 @@ export interface SessionLogEntry {
 
 // ─── Provider ─────────────────────────────────────────────────────────────────
 
-export type ProviderName = 'openai' | 'anthropic' | 'gemini' | 'groq' | 'ollama' | 'custom';
+export type ProviderName = 'openai' | 'anthropic' | 'gemini' | 'groq' | 'ollama' | 'azure' | 'deepseek' | 'openrouter' | 'mistral' | 'custom';
 
 // ─── Messages & Requests ──────────────────────────────────────────────────────
 

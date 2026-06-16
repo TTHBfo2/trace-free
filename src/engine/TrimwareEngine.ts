@@ -46,6 +46,21 @@ export class TrimwareEngine {
     const sc = config.cache?.semantic  ?? {};
     const pc = config.cache?.plan      ?? {};
 
+    // Fail fast on bad config — silent misconfiguration is worse than an error.
+    const threshold = (sc as { similarityThreshold?: number }).similarityThreshold;
+    if (threshold !== undefined && (threshold < 0 || threshold > 1)) {
+      throw new Error(`[trimwares] cache.semantic.similarityThreshold must be between 0 and 1, got ${threshold}`);
+    }
+    if (rc.ttlMs !== undefined && rc.ttlMs < 0) {
+      throw new Error(`[trimwares] cache.response.ttlMs must be >= 0, got ${rc.ttlMs}`);
+    }
+    if (sc.ttlMs !== undefined && sc.ttlMs < 0) {
+      throw new Error(`[trimwares] cache.semantic.ttlMs must be >= 0, got ${sc.ttlMs}`);
+    }
+    if (pc.ttlMs !== undefined && pc.ttlMs < 0) {
+      throw new Error(`[trimwares] cache.plan.ttlMs must be >= 0, got ${pc.ttlMs}`);
+    }
+
     this.config = {
       provider,
       defaultModel: config.defaultModel ?? '',
@@ -184,6 +199,40 @@ export class TrimwareEngine {
     this.logSession(requestId, resolvedModel, usage.inputTokens, usage.outputTokens, request, false, 'none', latencyMs, nativeCache, entry, usage.nativeCachedTokens);
 
     return rawResponse;
+  }
+
+  // ─── Pre-call optimization for streaming path ─────────────────────────────
+  // Non-streaming calls get steps 3-6 via intercept(). The streaming path
+  // calls cacheOptimizer.optimize() directly (step 6), so it was silently
+  // skipping tool filtering (step 4) and model routing (step 5). Call this
+  // before cacheOptimizer.optimize() in the streaming path to fill the gap.
+
+  optimizePreCall(request: LLMRequest): LLMRequest {
+    let optimized = { ...request };
+
+    const maxTurns = (this.config.optimization as { maxHistoryTurns?: number }).maxHistoryTurns;
+    if (maxTurns && maxTurns > 0) {
+      const system    = optimized.messages.filter(m => m.role === 'system');
+      const nonSystem = optimized.messages.filter(m => m.role !== 'system');
+      optimized = { ...optimized, messages: [...system, ...nonSystem.slice(-maxTurns)] };
+    }
+
+    if (this.config.optimization.pruneContext) {
+      optimized = { ...optimized, messages: this.pruner.prune(optimized.messages).messages };
+    }
+
+    const filterTools = (this.config.optimization as { filterToolSchemas?: boolean }).filterToolSchemas !== false;
+    if (filterTools && optimized.tools && optimized.tools.length >= 3) {
+      const filtered = this.toolFilter.filter(optimized.tools, optimized.messages);
+      if (filtered.tokensSaved > 0) optimized = { ...optimized, tools: filtered.tools };
+    }
+
+    let resolvedModel = optimized.model ?? this.config.defaultModel;
+    if ((this.config.optimization as { routeToCheapestModel?: boolean }).routeToCheapestModel !== false) {
+      const decision = this.router.route(optimized, resolvedModel, this.provider);
+      if (decision.wasRouted) resolvedModel = decision.model;
+    }
+    return { ...optimized, model: resolvedModel };
   }
 
   // ─── Streaming intercept ──────────────────────────────────────────────────

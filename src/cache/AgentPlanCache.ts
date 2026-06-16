@@ -27,8 +27,8 @@ export class AgentPlanCache {
     this.cleanupTimer = setInterval(() => this.evictExpired(), 5 * 60 * 1000);
   }
 
-  getPlan(taskDescription: string): AgentPlan | null {
-    const hash = this.hashTask(taskDescription);
+  getPlan(taskDescription: string, tools?: Array<{ name: string }>): AgentPlan | null {
+    const hash = this.hashTask(taskDescription, tools?.map(t => t.name));
 
     for (const [, plan] of this.store) {
       if (plan.taskHash !== hash) continue;
@@ -50,11 +50,12 @@ export class AgentPlanCache {
     model: string;
     inputTokensUsed: number;
     outputTokensUsed: number;
+    tools?: Array<{ name: string }>;
   }): AgentPlan {
     if (this.store.size >= this.maxEntries) this.evictLRU();
 
     const planId = generatePlanId();
-    const taskHash = this.hashTask(params.taskDescription);
+    const taskHash = this.hashTask(params.taskDescription, params.tools?.map(t => t.name));
     const estimatedTokensSaved = params.inputTokensUsed + params.outputTokensUsed;
 
     const plan: AgentPlan = {
@@ -82,6 +83,7 @@ export class AgentPlanCache {
     model: string;
     inputTokensUsed: number;
     outputTokensUsed: number;
+    availableTools?: Array<{ name: string }>;
   }): AgentPlan {
     const steps: AgentStep[] = params.toolCalls.map((tc, i) => ({
       stepIndex: i,
@@ -97,6 +99,7 @@ export class AgentPlanCache {
       model: params.model,
       inputTokensUsed: params.inputTokensUsed,
       outputTokensUsed: params.outputTokensUsed,
+      ...(params.availableTools ? { tools: params.availableTools } : {}),
     });
   }
 
@@ -137,9 +140,11 @@ export class AgentPlanCache {
     this.clear();
   }
 
-  private hashTask(taskDescription: string): string {
+  private hashTask(taskDescription: string, toolNames?: string[]): string {
     const normalized = taskDescription.toLowerCase().replace(/\s+/g, ' ').trim();
-    return createHash('sha256').update(normalized).digest('hex').slice(0, 16);
+    // Include sorted tool names so plan cache correctly misses when available tools change.
+    const toolSignature = toolNames ? toolNames.slice().sort().join(',') : '';
+    return createHash('sha256').update(`${normalized}\x00${toolSignature}`).digest('hex').slice(0, 16);
   }
 
   private evictExpired(): void {

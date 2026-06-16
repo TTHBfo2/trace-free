@@ -132,10 +132,12 @@ function wrapOpenAICompatible<T extends object>(
                     recordStreamingCacheHit(engine, request, cacheHit, streamStart);
                     return buildFakeOpenAIStream(extractCachedContent(cacheHit));
                   }
-                  // Apply the same optimizations (tool filtering, model routing) that
-                  // non-streaming calls get via engine.intercept().
-                  const cacheOpt     = engine.cacheOptimizer.optimize(request, engine.provider);
-                  const sdkParams    = denormalizeOpenAIParams(params, { ...request, ...cacheOpt });
+                  // Apply the full pre-call optimization pipeline (tool filtering, model
+                  // routing, native cache injection) that non-streaming calls get via
+                  // engine.intercept().
+                  const preOptimized = engine.optimizePreCall(request);
+                  const cacheOpt     = engine.cacheOptimizer.optimize(preOptimized, engine.provider);
+                  const sdkParams    = denormalizeOpenAIParams(params, { ...preOptimized, ...cacheOpt });
                   const streamParams = { ...sdkParams, stream_options: { include_usage: true } };
                   const stream = await (compValue as ProxiedMethod).call(compTarget, streamParams) as AsyncIterable<unknown>;
                   // Pass original `request` (not optimized) so response-cache key stays consistent
@@ -187,14 +189,15 @@ function wrapAnthropic<T extends object>(client: T, config?: TrimmerConfig): Wra
               const cacheHit    = engine.responseCache.get(request);
               if (cacheHit) {
                 recordStreamingCacheHit(engine, request, cacheHit, streamStart);
-                return buildFakeAnthropicStream(extractCachedContent(cacheHit));
+                return buildFakeAnthropicStream(extractCachedContent(cacheHit), cacheHit);
               }
-              // Apply cache_control injection (and any other pre-call optimizations) that
-              // non-streaming calls get via engine.intercept() / denormalizeAnthropicParams().
-              // Without this, Anthropic never sees cache_control blocks in streaming mode
-              // and cache_creation/read tokens are always 0.
-              const cacheOpt  = engine.cacheOptimizer.optimize(request, 'anthropic');
-              const sdkParams = denormalizeAnthropicParams(params, { ...request, ...cacheOpt }, engine);
+              // Apply the full pre-call optimization pipeline (tool filtering, model
+              // routing, cache_control injection) that non-streaming calls get via
+              // engine.intercept(). Without this the streaming path silently skips
+              // tool schema filtering and model routing — both selling-point features.
+              const preOptimized = engine.optimizePreCall(request);
+              const cacheOpt     = engine.cacheOptimizer.optimize(preOptimized, 'anthropic');
+              const sdkParams    = denormalizeAnthropicParams(params, { ...preOptimized, ...cacheOpt }, engine);
               const stream = await (msgValue as ProxiedMethod).call(msgTarget, sdkParams) as AsyncIterable<unknown>;
               // Pass original `request` (not optimized) so response-cache key stays consistent
               // with what engine.responseCache.get(request) looks up on the next call.
@@ -343,8 +346,34 @@ async function* buildFakeOpenAIStream(content: string): AsyncIterable<unknown> {
   yield { choices: [{ delta: {}, finish_reason: 'stop' }] };
 }
 
-async function* buildFakeAnthropicStream(content: string): AsyncIterable<unknown> {
-  yield { type: 'content_block_delta', delta: { type: 'text_delta', text: content } };
+async function* buildFakeAnthropicStream(content: string, cacheHit?: LLMResponse): AsyncIterable<unknown> {
+  const model        = cacheHit?.model ?? 'unknown';
+  const inputTokens  = cacheHit?.usage.inputTokens  ?? 0;
+  const outputTokens = cacheHit?.usage.outputTokens ?? Math.ceil(content.length / 4);
+  // Emit the full Anthropic SSE event sequence so consumer code that reads
+  // message_start (for model/usage) or message_delta (for output_tokens) gets
+  // valid data even on a response-cache hit.
+  yield {
+    type: 'message_start',
+    message: {
+      id: `msg_cached_${Date.now()}`,
+      type: 'message',
+      role: 'assistant',
+      content: [],
+      model,
+      stop_reason: null,
+      stop_sequence: null,
+      usage: { input_tokens: inputTokens, output_tokens: 0 },
+    },
+  };
+  yield { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } };
+  yield { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: content } };
+  yield { type: 'content_block_stop', index: 0 };
+  yield {
+    type: 'message_delta',
+    delta: { stop_reason: 'end_turn', stop_sequence: null },
+    usage: { output_tokens: outputTokens },
+  };
   yield { type: 'message_stop' };
 }
 
@@ -359,41 +388,50 @@ async function* wrapOpenAIStream(
   let inputTokens = 0;
   let outputTokens = 0;
   const requestId = generateRequestId();
+  let streamErrored = false;
 
-  for await (const chunk of stream) {
-    const c = chunk as Record<string, unknown>;
-    const delta = (c['choices'] as Array<{ delta?: { content?: string } }>)?.[0]?.delta?.content ?? '';
-    fullContent += delta;
-    if (c['model']) model = c['model'] as string;
-    const usage = c['usage'] as Record<string, number> | undefined;
-    if (usage) { inputTokens = usage['prompt_tokens'] ?? 0; outputTokens = usage['completion_tokens'] ?? 0; }
-    yield chunk;
+  try {
+    for await (const chunk of stream) {
+      const c = chunk as Record<string, unknown>;
+      const delta = (c['choices'] as Array<{ delta?: { content?: string } }>)?.[0]?.delta?.content ?? '';
+      fullContent += delta;
+      if (c['model']) model = c['model'] as string;
+      const usage = c['usage'] as Record<string, number> | undefined;
+      if (usage) { inputTokens = usage['prompt_tokens'] ?? 0; outputTokens = usage['completion_tokens'] ?? 0; }
+      yield chunk;
+    }
+  } catch (err) {
+    streamErrored = true;
+    throw err;
+  } finally {
+    // Always record cost + session entry, even if the stream errored or the
+    // consumer broke out early — so billing gaps never appear in the log.
+    const latencyMs   = Date.now() - startMs;
+    const pricing     = engine.costEngine.getPricing(model);
+    const attribution = engine.attributor.attribute(request, outputTokens, pricing);
+
+    if (inputTokens === 0) inputTokens   = attribution.totalInputTokens;
+    if (outputTokens === 0) outputTokens = attribution.totalOutputTokens;
+
+    const cost = engine.costEngine.computeCost(inputTokens, outputTokens, pricing);
+    if (!streamErrored) {
+      const responseForCache = {
+        content: fullContent, model, provider: engine.provider,
+        usage: { inputTokens, outputTokens, cachedTokens: 0, totalTokens: inputTokens + outputTokens },
+        cost, savings: 0, cached: false, cacheType: 'none' as const,
+        requestId, latencyMs,
+        _rawResponse: { choices: [{ message: { content: fullContent } }] },
+      };
+      engine.responseCache.set(request, responseForCache as unknown as import('./types/index.js').LLMResponse);
+    }
+    const entry = engine.costEngine.record({ requestId, provider: engine.provider, model, inputTokens, outputTokens, cached: false, cacheType: 'none', latencyMs, request, savings: 0 });
+    engine.sessionLog.write({
+      timestamp: Date.now(), requestId, provider: engine.provider, model,
+      attribution, cached: false, cacheType: 'none', latencyMs, nativeCache: false,
+      realInputTokens: inputTokens, realOutputTokens: outputTokens,
+      nativeCachedTokens: 0, realCost: entry.cost, realSavings: entry.savings,
+    });
   }
-
-  const latencyMs  = Date.now() - startMs;
-  const pricing    = engine.costEngine.getPricing(model);
-  const attribution = engine.attributor.attribute(request, outputTokens, pricing);
-
-  // Fall back to attributor counts if provider didn't send usage in stream
-  if (inputTokens === 0) inputTokens   = attribution.totalInputTokens;
-  if (outputTokens === 0) outputTokens = attribution.totalOutputTokens;
-
-  const cost = engine.costEngine.computeCost(inputTokens, outputTokens, pricing);
-  const responseForCache = {
-    content: fullContent, model, provider: engine.provider,
-    usage: { inputTokens, outputTokens, cachedTokens: 0, totalTokens: inputTokens + outputTokens },
-    cost, savings: 0, cached: false, cacheType: 'none' as const,
-    requestId, latencyMs,
-    _rawResponse: { choices: [{ message: { content: fullContent } }] },
-  };
-  engine.responseCache.set(request, responseForCache as unknown as import('./types/index.js').LLMResponse);
-  const entry = engine.costEngine.record({ requestId, provider: engine.provider, model, inputTokens, outputTokens, cached: false, cacheType: 'none', latencyMs, request, savings: 0 });
-  engine.sessionLog.write({
-    timestamp: Date.now(), requestId, provider: engine.provider, model,
-    attribution, cached: false, cacheType: 'none', latencyMs, nativeCache: false,
-    realInputTokens: inputTokens, realOutputTokens: outputTokens,
-    nativeCachedTokens: 0, realCost: entry.cost, realSavings: entry.savings,
-  });
 }
 
 async function* wrapAnthropicStream(
@@ -409,57 +447,64 @@ async function* wrapAnthropicStream(
   let cacheReadTokens = 0;
   let cacheWriteTokens = 0;
   const requestId = generateRequestId();
+  let streamErrored = false;
 
-  for await (const chunk of stream) {
-    const c = chunk as Record<string, unknown>;
-    if (c['type'] === 'content_block_delta') {
-      const delta = (c['delta'] as Record<string, string>)?.['text'] ?? '';
-      fullContent += delta;
-    }
-    if (c['type'] === 'message_start') {
-      const msg = c['message'] as Record<string, unknown>;
-      model = msg?.['model'] as string ?? model;
-      const usage = msg?.['usage'] as Record<string, number>;
-      if (usage) {
-        inputTokens      = usage['input_tokens'] ?? 0;
-        cacheReadTokens  = usage['cache_read_input_tokens'] ?? 0;
-        cacheWriteTokens = usage['cache_creation_input_tokens'] ?? 0;
+  try {
+    for await (const chunk of stream) {
+      const c = chunk as Record<string, unknown>;
+      if (c['type'] === 'content_block_delta') {
+        const delta = (c['delta'] as Record<string, string>)?.['text'] ?? '';
+        fullContent += delta;
       }
+      if (c['type'] === 'message_start') {
+        const msg = c['message'] as Record<string, unknown>;
+        model = msg?.['model'] as string ?? model;
+        const usage = msg?.['usage'] as Record<string, number>;
+        if (usage) {
+          inputTokens      = usage['input_tokens'] ?? 0;
+          cacheReadTokens  = usage['cache_read_input_tokens'] ?? 0;
+          cacheWriteTokens = usage['cache_creation_input_tokens'] ?? 0;
+        }
+      }
+      if (c['type'] === 'message_delta') {
+        const usage = c['usage'] as Record<string, number>;
+        if (usage) { outputTokens = usage['output_tokens'] ?? 0; }
+      }
+      yield chunk;
     }
-    if (c['type'] === 'message_delta') {
-      const usage = c['usage'] as Record<string, number>;
-      if (usage) { outputTokens = usage['output_tokens'] ?? 0; }
+  } catch (err) {
+    streamErrored = true;
+    throw err;
+  } finally {
+    // Always record cost + session entry, even if the stream errored or the
+    // consumer broke out early — so billing gaps never appear in the log.
+    const latencyMs   = Date.now() - startMs;
+    const pricing     = engine.costEngine.getPricing(model);
+    const attribution = engine.attributor.attribute(request, outputTokens, pricing);
+
+    if (inputTokens === 0) inputTokens   = attribution.totalInputTokens;
+    if (outputTokens === 0) outputTokens = attribution.totalOutputTokens;
+
+    const totalInputTokens = inputTokens + cacheWriteTokens;
+    const cost = engine.costEngine.computeCost(totalInputTokens, outputTokens, pricing, cacheReadTokens);
+    if (!streamErrored) {
+      const responseForCache = {
+        content: fullContent, model, provider: engine.provider,
+        usage: { inputTokens: totalInputTokens, outputTokens, cachedTokens: cacheReadTokens, totalTokens: totalInputTokens + outputTokens },
+        cost, savings: 0, cached: false, cacheType: 'none' as const,
+        requestId, latencyMs,
+        _rawResponse: { content: [{ type: 'text', text: fullContent }] },
+      };
+      engine.responseCache.set(request, responseForCache as unknown as import('./types/index.js').LLMResponse);
     }
-    yield chunk;
+    const entry = engine.costEngine.record({ requestId, provider: engine.provider, model, inputTokens: totalInputTokens, outputTokens, cached: false, cacheType: 'none', latencyMs, request, savings: 0, nativeCachedTokens: cacheReadTokens });
+    engine.sessionLog.write({
+      timestamp: Date.now(), requestId, provider: engine.provider, model,
+      attribution, cached: false, cacheType: 'none', latencyMs, nativeCache: cacheReadTokens > 0 || cacheWriteTokens > 0,
+      realInputTokens: totalInputTokens, realOutputTokens: outputTokens,
+      nativeCachedTokens: cacheReadTokens, realCost: entry.cost, realSavings: entry.savings,
+    });
   }
-
-  const latencyMs   = Date.now() - startMs;
-  const pricing     = engine.costEngine.getPricing(model);
-  const attribution = engine.attributor.attribute(request, outputTokens, pricing);
-
-  // Anthropic always sends usage in message_start/message_delta — fallback just in case
-  if (inputTokens === 0) inputTokens   = attribution.totalInputTokens;
-  if (outputTokens === 0) outputTokens = attribution.totalOutputTokens;
-
-  // cache_creation_input_tokens are billed at the full input rate (folded into
-  // inputTokens); cache_read_input_tokens get the discounted cachedInputPerMillion rate.
-  const totalInputTokens = inputTokens + cacheWriteTokens;
-  const cost = engine.costEngine.computeCost(totalInputTokens, outputTokens, pricing, cacheReadTokens);
-  const responseForCache = {
-    content: fullContent, model, provider: engine.provider,
-    usage: { inputTokens: totalInputTokens, outputTokens, cachedTokens: cacheReadTokens, totalTokens: totalInputTokens + outputTokens },
-    cost, savings: 0, cached: false, cacheType: 'none' as const,
-    requestId, latencyMs,
-    _rawResponse: { content: [{ type: 'text', text: fullContent }] },
-  };
-  engine.responseCache.set(request, responseForCache as unknown as import('./types/index.js').LLMResponse);
-  const entry = engine.costEngine.record({ requestId, provider: engine.provider, model, inputTokens: totalInputTokens, outputTokens, cached: false, cacheType: 'none', latencyMs, request, savings: 0, nativeCachedTokens: cacheReadTokens });
-  engine.sessionLog.write({
-    timestamp: Date.now(), requestId, provider: engine.provider, model,
-    attribution, cached: false, cacheType: 'none', latencyMs, nativeCache: cacheReadTokens > 0 || cacheWriteTokens > 0,
-    realInputTokens: totalInputTokens, realOutputTokens: outputTokens,
-    nativeCachedTokens: cacheReadTokens, realCost: entry.cost, realSavings: entry.savings,
-  });
 }
 
 // ─── Denormalizers: our optimized LLMRequest → back to SDK format ─────────────
@@ -598,22 +643,22 @@ export const trimwares = {
 
   /** Azure OpenAI — pass an OpenAI client configured with Azure baseURL */
   azure<T extends object>(client: T, config?: TrimmerConfig): Wrapped<T> {
-    return wrapOpenAICompatible(client, 'openai', config);
+    return wrapOpenAICompatible(client, 'azure', config);
   },
 
   /** DeepSeek — OpenAI-compatible. Pass new OpenAI({ baseURL: 'https://api.deepseek.com' }) */
   deepseek<T extends object>(client: T, config?: TrimmerConfig): Wrapped<T> {
-    return wrapOpenAICompatible(client, 'openai', config);
+    return wrapOpenAICompatible(client, 'deepseek', config);
   },
 
   /** OpenRouter — routes to 100+ models. Pass new OpenAI({ baseURL: 'https://openrouter.ai/api/v1' }) */
   openrouter<T extends object>(client: T, config?: TrimmerConfig): Wrapped<T> {
-    return wrapOpenAICompatible(client, 'openai', config);
+    return wrapOpenAICompatible(client, 'openrouter', config);
   },
 
   /** Mistral — OpenAI-compatible mode */
   mistral<T extends object>(client: T, config?: TrimmerConfig): Wrapped<T> {
-    return wrapOpenAICompatible(client, 'openai', config);
+    return wrapOpenAICompatible(client, 'mistral', config);
   },
 
   /** Any OpenAI-compatible API — Together AI, Perplexity, Fireworks, Cerebras, etc. */

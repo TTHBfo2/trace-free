@@ -25,8 +25,9 @@ export class SessionLog {
     if (this.enabled) {
       try {
         mkdirSync(join(process.cwd(), dir), { recursive: true });
-      } catch {
+      } catch (err) {
         this.enabled = false;
+        console.warn(`[trimwares] Session log disabled: could not create ${join(process.cwd(), dir)} — ${(err as Error).message ?? String(err)}`);
       }
     }
   }
