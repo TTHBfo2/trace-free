@@ -408,11 +408,11 @@ async function* wrapOpenAIStream(
     // consumer broke out early — so billing gaps never appear in the log.
     const latencyMs   = Date.now() - startMs;
     const pricing     = engine.costEngine.getPricing(model);
-    const attribution = engine.attributor.attribute(request, outputTokens, pricing);
 
-    if (inputTokens === 0) inputTokens   = attribution.totalInputTokens;
-    if (outputTokens === 0) outputTokens = attribution.totalOutputTokens;
+    if (inputTokens === 0) inputTokens   = engine.attributor.attribute(request, 0, pricing).totalInputTokens;
+    if (outputTokens === 0) outputTokens = Math.ceil(fullContent.length / 4);
 
+    const attribution = engine.attributor.attribute(request, outputTokens, pricing, inputTokens);
     const cost = engine.costEngine.computeCost(inputTokens, outputTokens, pricing);
     if (!streamErrored) {
       const responseForCache = {
@@ -478,30 +478,35 @@ async function* wrapAnthropicStream(
   } finally {
     // Always record cost + session entry, even if the stream errored or the
     // consumer broke out early — so billing gaps never appear in the log.
-    const latencyMs   = Date.now() - startMs;
-    const pricing     = engine.costEngine.getPricing(model);
-    const attribution = engine.attributor.attribute(request, outputTokens, pricing);
+    const latencyMs = Date.now() - startMs;
+    const pricing   = engine.costEngine.getPricing(model);
 
-    if (inputTokens === 0) inputTokens   = attribution.totalInputTokens;
-    if (outputTokens === 0) outputTokens = attribution.totalOutputTokens;
+    // Provider-reported totals (0 = stream errored before usage events arrived)
+    const providerInput = inputTokens + cacheWriteTokens;
+    let   effectiveInput = providerInput > 0 ? providerInput
+      : engine.attributor.attribute(request, 0, pricing).totalInputTokens;
+    if (outputTokens === 0) outputTokens = Math.ceil(fullContent.length / 4);
 
-    const totalInputTokens = inputTokens + cacheWriteTokens;
-    const cost = engine.costEngine.computeCost(totalInputTokens, outputTokens, pricing, cacheReadTokens);
+    // Rescale attribution to real provider total when available; else pure heuristic
+    const attribution = engine.attributor.attribute(
+      request, outputTokens, pricing, providerInput > 0 ? providerInput : undefined,
+    );
+    const cost = engine.costEngine.computeCost(effectiveInput, outputTokens, pricing, cacheReadTokens);
     if (!streamErrored) {
       const responseForCache = {
         content: fullContent, model, provider: engine.provider,
-        usage: { inputTokens: totalInputTokens, outputTokens, cachedTokens: cacheReadTokens, totalTokens: totalInputTokens + outputTokens },
+        usage: { inputTokens: effectiveInput, outputTokens, cachedTokens: cacheReadTokens, totalTokens: effectiveInput + outputTokens },
         cost, savings: 0, cached: false, cacheType: 'none' as const,
         requestId, latencyMs,
         _rawResponse: { content: [{ type: 'text', text: fullContent }] },
       };
       engine.responseCache.set(request, responseForCache as unknown as import('./types/index.js').LLMResponse);
     }
-    const entry = engine.costEngine.record({ requestId, provider: engine.provider, model, inputTokens: totalInputTokens, outputTokens, cached: false, cacheType: 'none', latencyMs, request, savings: 0, nativeCachedTokens: cacheReadTokens });
+    const entry = engine.costEngine.record({ requestId, provider: engine.provider, model, inputTokens: effectiveInput, outputTokens, cached: false, cacheType: 'none', latencyMs, request, savings: 0, nativeCachedTokens: cacheReadTokens });
     engine.sessionLog.write({
       timestamp: Date.now(), requestId, provider: engine.provider, model,
       attribution, cached: false, cacheType: 'none', latencyMs, nativeCache: cacheReadTokens > 0 || cacheWriteTokens > 0,
-      realInputTokens: totalInputTokens, realOutputTokens: outputTokens,
+      realInputTokens: effectiveInput, realOutputTokens: outputTokens,
       nativeCachedTokens: cacheReadTokens, realCost: entry.cost, realSavings: entry.savings,
     });
   }

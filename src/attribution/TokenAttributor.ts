@@ -19,35 +19,64 @@ export class TokenAttributor {
     this.counter = new TokenCounter(provider);
   }
 
-  attribute(request: LLMRequest, outputTokens: number, pricing: ModelPricing): AttributionBreakdown {
-    const systemMessages = request.messages.filter(m => m.role === 'system');
+  /**
+   * Break down a request into attribution categories.
+   *
+   * @param realInputTokens - When provided (from provider usage response), all input
+   *   categories are rescaled proportionally so they sum to this exact total. This
+   *   eliminates the ±10% tokenizer approximation error at the total level while
+   *   preserving accurate relative proportions across categories.
+   */
+  attribute(
+    request: LLMRequest,
+    outputTokens: number,
+    pricing: ModelPricing,
+    realInputTokens?: number,
+  ): AttributionBreakdown {
+    const systemMessages    = request.messages.filter(m => m.role === 'system');
     const nonSystemMessages = request.messages.filter(m => m.role !== 'system');
-    const lastUserMsg = [...nonSystemMessages].reverse().find(m => m.role === 'user');
-    const historyMessages = nonSystemMessages.filter(m => m !== lastUserMsg);
+    const lastUserMsg       = [...nonSystemMessages].reverse().find(m => m.role === 'user');
+    const historyMessages   = nonSystemMessages.filter(m => m !== lastUserMsg);
 
-    // Count each category
+    // Raw token counts per category (using BPE if tiktoken available, 4-char/token otherwise)
     const systemRaw = systemMessages.reduce((s, m) => s + m.content, '');
-    const { systemTokens, ragTokensFromSystem } = this.splitSystemAndRag(systemRaw);
+    const { systemTokens: rawSystem, ragTokensFromSystem } = this.splitSystemAndRag(systemRaw);
 
-    const toolTokens = this.countToolTokens(request.tools ?? []);
+    const rawTool = this.countToolTokens(request.tools ?? []);
 
-    const ragTokensFromMessages = historyMessages.reduce((sum, m) => {
+    const ragFromMessages = historyMessages.reduce((sum, m) => {
       return sum + (this.isRagContent(m.content) ? this.counter.countText(m.content) : 0);
     }, 0);
-    const ragTokens = ragTokensFromSystem + ragTokensFromMessages;
-
-    const historyTokens = historyMessages.reduce((sum, m) => {
+    const rawRag     = ragTokensFromSystem + ragFromMessages;
+    const rawHistory = historyMessages.reduce((sum, m) => {
       const t = this.counter.countText(m.content);
       return sum + (this.isRagContent(m.content) ? 0 : t);
     }, 0);
+    const rawUser = lastUserMsg ? this.counter.countText(lastUserMsg.content) : 0;
 
-    const userQueryTokens = lastUserMsg ? this.counter.countText(lastUserMsg.content) : 0;
+    const estimatedTotal = rawSystem + rawTool + rawRag + rawHistory + rawUser;
 
-    const totalInput = systemTokens + toolTokens + ragTokens + historyTokens + userQueryTokens;
+    // Rescale categories to match provider-reported total when available.
+    // This makes the sum exact at the total level while preserving proportions.
+    let systemT = rawSystem, toolT = rawTool, ragT = rawRag, historyT = rawHistory, userT = rawUser;
+    if (realInputTokens !== undefined && realInputTokens > 0 && estimatedTotal > 0) {
+      const scale = realInputTokens / estimatedTotal;
+      systemT  = Math.round(rawSystem  * scale);
+      toolT    = Math.round(rawTool    * scale);
+      ragT     = Math.round(rawRag     * scale);
+      historyT = Math.round(rawHistory * scale);
+      // Last category absorbs rounding remainder so sum = realInputTokens exactly
+      userT    = realInputTokens - systemT - toolT - ragT - historyT;
+      if (userT < 0) {
+        // Edge case: rounding pushed us over; trim the largest category
+        systemT = Math.max(0, systemT + userT);
+        userT   = 0;
+      }
+    }
 
-    const inputCost = (totalInput / 1_000_000) * pricing.inputPerMillion;
-    const outputCost = (outputTokens / 1_000_000) * pricing.outputPerMillion;
-    const totalCost = inputCost + outputCost;
+    const totalInput = realInputTokens ?? estimatedTotal;
+    const totalCost  = (totalInput / 1_000_000) * pricing.inputPerMillion
+                     + (outputTokens / 1_000_000) * pricing.outputPerMillion;
 
     const makeCategory = (tokens: number, isOutput = false): TokenCategory => {
       const cost = isOutput
@@ -62,11 +91,11 @@ export class TokenAttributor {
     };
 
     return {
-      systemPrompt:        makeCategory(systemTokens),
-      toolSchemas:         makeCategory(toolTokens),
-      ragChunks:           makeCategory(ragTokens),
-      conversationHistory: makeCategory(historyTokens),
-      userQuery:           makeCategory(userQueryTokens),
+      systemPrompt:        makeCategory(systemT),
+      toolSchemas:         makeCategory(toolT),
+      ragChunks:           makeCategory(ragT),
+      conversationHistory: makeCategory(historyT),
+      userQuery:           makeCategory(userT),
       outputTokens:        makeCategory(outputTokens, true),
       totalInputTokens:    totalInput,
       totalOutputTokens:   outputTokens,
@@ -79,7 +108,6 @@ export class TokenAttributor {
   private splitSystemAndRag(systemText: string): { systemTokens: number; ragTokensFromSystem: number } {
     if (!systemText) return { systemTokens: 0, ragTokensFromSystem: 0 };
 
-    // Split on blank lines to get paragraphs/blocks
     const blocks = systemText.split(/\n{2,}/);
     let systemTokens = 0;
     let ragTokensFromSystem = 0;

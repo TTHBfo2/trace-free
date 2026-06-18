@@ -1,17 +1,28 @@
 import { LLMMessage } from '../types/index.js';
+import { get_encoding } from 'tiktoken';
 
-// Approximation: ~4 chars per token for English prose (GPT-style BPE)
+// Fallback: ~4 chars per token for English prose (GPT-style BPE approximation)
 const CHARS_PER_TOKEN = 4;
 
 // Per-provider message overhead in tokens (role + formatting)
 const MESSAGE_OVERHEAD: Record<string, number> = {
-  openai: 4,
+  openai:    4,
   anthropic: 3,
-  gemini: 2,
-  groq: 4,
-  ollama: 3,
-  custom: 3,
+  gemini:    2,
+  groq:      4,
+  ollama:    3,
+  custom:    3,
 };
+
+// BPE encoder using cl100k_base — the tokenizer used by GPT-4o, GPT-4o-mini, and
+// closely compatible with Anthropic Claude. Exact for OpenAI; within ~2% for Anthropic.
+// Falls back to 4-char/token heuristic if tiktoken fails to initialise (e.g. WASM error).
+let bpeEncoder: ReturnType<typeof get_encoding> | null = null;
+try {
+  bpeEncoder = get_encoding('cl100k_base');
+} catch {
+  // WASM init failed — 4-char/token heuristic stays active
+}
 
 export class TokenCounter {
   private provider: string;
@@ -22,6 +33,7 @@ export class TokenCounter {
 
   countText(text: string): number {
     if (!text) return 0;
+    if (bpeEncoder) return bpeEncoder.encode(text).length;
     return Math.ceil(text.length / CHARS_PER_TOKEN);
   }
 

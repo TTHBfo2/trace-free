@@ -131,7 +131,7 @@ export class LLMCostTrimmer {
     // 2. Semantic cache
     const semanticCacheEnabled = (this.config.cache.semantic as { enabled?: boolean }).enabled !== false;
     if (semanticCacheEnabled) {
-      const hit = this.semanticCache.get(req);
+      const hit = await this.semanticCache.get(req);
       if (hit) {
         const latencyMs = Date.now() - startMs;
         const entry = this.costEngine.record({ requestId, provider, model: hit.model, inputTokens: hit.usage.inputTokens, outputTokens: hit.usage.outputTokens, cached: true, cacheType: 'semantic', latencyMs, request, savings: hit.cost });
@@ -195,7 +195,7 @@ export class LLMCostTrimmer {
 
     // 7. Store in caches
     this.responseCache.set(request, response);
-    this.semanticCache.set(request, response);
+    void this.semanticCache.set(request, response);
 
     // 8. Record cost
     const entry = this.costEngine.record({ requestId, provider: resolvedProvider, model: raw.model, inputTokens: raw.inputTokens, outputTokens: raw.outputTokens, cached: false, cacheType: 'none', latencyMs, request, savings: 0, nativeCachedTokens });

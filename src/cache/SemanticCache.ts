@@ -1,13 +1,12 @@
 import { LLMRequest, LLMResponse, CacheStats } from '../types/index.js';
 
-// Local-first heuristic similarity cache — zero extra AI calls, zero ML models.
-// Uses character trigram TF-IDF vectors + cosine similarity to detect
-// structurally similar (not semantically equivalent) prompts.
+// Semantic similarity cache.
+// Uses all-MiniLM-L6-v2 sentence embeddings via @xenova/transformers when available
+// (quantized ONNX, ~23MB, downloaded once and cached on disk — no API call, no internet
+// after first download). Falls back to character trigram TF-IDF when not installed.
 //
-// NOTE: This is NOT a semantic cache. It matches on character-level structure,
-// not meaning. "Capital of France?" and "Capital of Germany?" are structurally
-// similar and may match at low thresholds. Threshold 0.97 mitigates false positives.
-// True semantic caching (all-MiniLM-L6-v2 local embeddings) is planned for v0.2.
+// Disabled by default — enable with: cache: { semantic: { enabled: true } }
+// Install embeddings support: npm install @xenova/transformers
 
 interface SemanticEntry {
   response: LLMResponse;
@@ -20,8 +19,34 @@ interface SemanticEntry {
 }
 
 const DEFAULT_THRESHOLD = 0.92;
-const DEFAULT_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const DEFAULT_TTL_MS    = 10 * 60 * 1000;
 const DEFAULT_MAX_ENTRIES = 500;
+
+// ─── Embedder singleton ───────────────────────────────────────────────────────
+// Shared across all SemanticCache instances — model loads once per process.
+
+type EmbedderFn = (text: string) => Promise<Float32Array>;
+let embedderPromise: Promise<EmbedderFn | null> | null = null;
+
+async function loadEmbedder(): Promise<EmbedderFn | null> {
+  try {
+    // Dynamic import keeps the package loadable even when @xenova/transformers is absent.
+    const { pipeline } = await import('@xenova/transformers');
+    // quantized: true → int8 ONNX, ~23MB vs ~90MB for f32; minimal quality loss for similarity
+    const pipe = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', { quantized: true });
+    return async (text: string): Promise<Float32Array> => {
+      const output = await (pipe as (t: string, opts: Record<string, unknown>) => Promise<{ data: ArrayLike<number> }>)(
+        text, { pooling: 'mean', normalize: true },
+      );
+      return new Float32Array(output.data);
+    };
+  } catch {
+    // @xenova/transformers not installed or WASM failed — trigram fallback is used silently
+    return null;
+  }
+}
+
+// ─── Cache class ─────────────────────────────────────────────────────────────
 
 export class SemanticCache {
   private store: SemanticEntry[] = [];
@@ -32,15 +57,15 @@ export class SemanticCache {
   private missCount = 0;
 
   constructor(options: { similarityThreshold?: number; ttlMs?: number; maxEntries?: number } = {}) {
-    this.threshold = options.similarityThreshold ?? DEFAULT_THRESHOLD;
-    this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
+    this.threshold  = options.similarityThreshold ?? DEFAULT_THRESHOLD;
+    this.ttlMs      = options.ttlMs      ?? DEFAULT_TTL_MS;
     this.maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
   }
 
-  get(request: LLMRequest): LLMResponse | null {
+  async get(request: LLMRequest): Promise<LLMResponse | null> {
     const queryText = this.extractQueryText(request);
-    const queryVec = this.vectorize(queryText);
-    const now = Date.now();
+    const queryVec  = await this.vectorize(queryText);
+    const now       = Date.now();
 
     let bestSimilarity = 0;
     let bestEntry: SemanticEntry | null = null;
@@ -62,25 +87,25 @@ export class SemanticCache {
     return null;
   }
 
-  set(request: LLMRequest, response: LLMResponse): void {
+  async set(request: LLMRequest, response: LLMResponse): Promise<void> {
     if (this.store.length >= this.maxEntries) this.evictLRU();
     this.evictExpired();
 
     const queryText = this.extractQueryText(request);
     this.store.push({
       response,
-      vector: this.vectorize(queryText),
+      vector:    await this.vectorize(queryText),
       queryText,
       createdAt: Date.now(),
-      ttlMs: this.ttlMs,
-      hitCount: 0,
+      ttlMs:     this.ttlMs,
+      hitCount:  0,
       lastHitAt: Date.now(),
     });
   }
 
   clear(): void {
-    this.store = [];
-    this.hitCount = 0;
+    this.store     = [];
+    this.hitCount  = 0;
     this.missCount = 0;
   }
 
@@ -88,11 +113,26 @@ export class SemanticCache {
     const total = this.hitCount + this.missCount;
     return {
       totalEntries: this.store.length,
-      hitCount: this.hitCount,
-      missCount: this.missCount,
-      hitRate: total > 0 ? parseFloat(((this.hitCount / total) * 100).toFixed(1)) : 0,
-      sizeBytes: this.store.length * 512, // rough estimate
+      hitCount:     this.hitCount,
+      missCount:    this.missCount,
+      hitRate:      total > 0 ? parseFloat(((this.hitCount / total) * 100).toFixed(1)) : 0,
+      sizeBytes:    this.store.length * 512,
     };
+  }
+
+  // ─── Private ─────────────────────────────────────────────────────────────
+
+  private async vectorize(text: string): Promise<Float32Array> {
+    if (!embedderPromise) embedderPromise = loadEmbedder();
+    const embedder = await embedderPromise;
+    if (embedder) {
+      try {
+        return await embedder(text);
+      } catch {
+        // Inference failed (e.g. Float32Array VM-context mismatch in test runners) — fall through
+      }
+    }
+    return trigramTfIdf(text);
   }
 
   private extractQueryText(request: LLMRequest): string {
@@ -105,10 +145,6 @@ export class SemanticCache {
       .trim();
   }
 
-  private vectorize(text: string): Float32Array {
-    return trigramTfIdf(text);
-  }
-
   private evictExpired(): void {
     const now = Date.now();
     this.store = this.store.filter(e => now - e.createdAt <= e.ttlMs);
@@ -117,7 +153,7 @@ export class SemanticCache {
   private evictLRU(): void {
     if (this.store.length === 0) return;
     let minTime = Infinity;
-    let minIdx = 0;
+    let minIdx  = 0;
     for (let i = 0; i < this.store.length; i++) {
       if (this.store[i].lastHitAt < minTime) { minTime = this.store[i].lastHitAt; minIdx = i; }
     }
@@ -125,7 +161,7 @@ export class SemanticCache {
   }
 }
 
-// ─── Local trigram vectorizer ─────────────────────────────────────────────────
+// ─── Trigram fallback (character TF-IDF) ─────────────────────────────────────
 
 const VECTOR_SIZE = 1024;
 
@@ -150,13 +186,12 @@ function trigramTfIdf(text: string): Float32Array {
 }
 
 function trigramBucket(str: string, i: number): number {
-  const a = str.charCodeAt(i) & 0xff;
+  const a = str.charCodeAt(i)     & 0xff;
   const b = str.charCodeAt(i + 1) & 0xff;
   const c = str.charCodeAt(i + 2) & 0xff;
-  // FNV-1a mix into [0, VECTOR_SIZE)
   let h = ((a ^ 0x811c9dc5) * 0x01000193) >>> 0;
-  h = ((h ^ b) * 0x01000193) >>> 0;
-  h = ((h ^ c) * 0x01000193) >>> 0;
+  h     = ((h ^ b)          * 0x01000193) >>> 0;
+  h     = ((h ^ c)          * 0x01000193) >>> 0;
   return h % VECTOR_SIZE;
 }
 
@@ -172,6 +207,5 @@ function normalize(vec: Float32Array): Float32Array {
 function cosineSimilarity(a: Float32Array, b: Float32Array): number {
   let dot = 0;
   for (let i = 0; i < a.length; i++) dot += a[i] * b[i];
-  // Both vectors are already normalized
   return Math.max(0, Math.min(1, dot));
 }

@@ -125,12 +125,10 @@ export class TrimwareEngine {
       return (cacheHit as unknown as { _rawResponse: RawSdkResult })._rawResponse;
     }
 
-    // 2. Heuristic cache check — only when explicitly enabled
-    // Disabled by default after stress testing confirmed false positives on
-    // same-structure/different-entity questions at any trigram threshold.
+    // 2. Semantic cache check — only when explicitly enabled
     const heuristicEnabled = (this.config.cache.semantic as { enabled?: boolean }).enabled === true;
     if (heuristicEnabled) {
-      const semanticHit = this.semanticCache.get(request);
+      const semanticHit = await this.semanticCache.get(request);
       if (semanticHit) {
         const latencyMs = Date.now() - startMs;
         const entry = this.costEngine.record({ requestId, provider: this.provider, model: semanticHit.model, inputTokens: semanticHit.usage.inputTokens, outputTokens: semanticHit.usage.outputTokens, cached: true, cacheType: 'semantic', latencyMs, request, savings: semanticHit.cost });
@@ -191,7 +189,7 @@ export class TrimwareEngine {
     if (!isStreaming) {
       const cacheEntry = buildCacheEntry(rawResponse, resolvedModel, this.provider, requestId, latencyMs, cost, usage);
       this.responseCache.set(request, cacheEntry as unknown as import('../types/index.js').LLMResponse);
-      this.semanticCache.set(request,  cacheEntry as unknown as import('../types/index.js').LLMResponse);
+      await this.semanticCache.set(request, cacheEntry as unknown as import('../types/index.js').LLMResponse);
     }
 
     // 10. Record cost + attribution
@@ -293,7 +291,9 @@ export class TrimwareEngine {
     costEntry: import('../types/index.js').CostEntry, nativeCachedTokens: number
   ): void {
     const pricing     = this.costEngine.getPricing(model);
-    const attribution = this.attributor.attribute(request, outputTokens, pricing);
+    // Pass provider-reported inputTokens so attribution categories are rescaled to
+    // match the real total rather than the 4-char/token heuristic estimate.
+    const attribution = this.attributor.attribute(request, outputTokens, pricing, inputTokens > 0 ? inputTokens : undefined);
     this.sessionLog.write({
       timestamp: Date.now(), requestId, provider: this.provider, model, attribution,
       cached, cacheType, latencyMs, nativeCache,
