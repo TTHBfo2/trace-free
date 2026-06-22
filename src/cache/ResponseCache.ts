@@ -30,7 +30,7 @@ export class ResponseCache {
   constructor(options: { ttlMs?: number; maxEntries?: number } = {}) {
     this.ttlMs      = options.ttlMs      ?? DEFAULT_TTL_MS;
     this.maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
-    this.cleanupTimer = setInterval(() => this.evictExpired(), 5 * 60_000);
+    this.cleanupTimer = setInterval(() => this.evictExpired(), 5 * 60_000).unref();
   }
 
   get(request: LLMRequest): LLMResponse | null {

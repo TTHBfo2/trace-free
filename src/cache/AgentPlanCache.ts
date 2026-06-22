@@ -24,7 +24,7 @@ export class AgentPlanCache {
   constructor(options: { ttlMs?: number; maxEntries?: number } = {}) {
     this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
     this.maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
-    this.cleanupTimer = setInterval(() => this.evictExpired(), 5 * 60 * 1000);
+    this.cleanupTimer = setInterval(() => this.evictExpired(), 5 * 60 * 1000).unref();
   }
 
   getPlan(taskDescription: string, tools?: Array<{ name: string }>): AgentPlan | null {
