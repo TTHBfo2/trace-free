@@ -30,9 +30,11 @@ function bar(percent: number, width = 24): string {
 }
 
 function usd(n: number): string {
-  if (n < 0.0001) return `$${(n * 1000000).toFixed(2)}µ`;
-  if (n < 0.01)   return `$${(n * 1000).toFixed(3)}m`;
-  return `$${n.toFixed(4)}`;
+  if (n === 0)   return '$0.00';
+  if (n < 0.001) return `$${n.toFixed(6)}`;
+  if (n < 0.1)   return `$${n.toFixed(4)}`;
+  if (n < 10)    return `$${n.toFixed(2)}`;
+  return `$${n.toFixed(2)}`;
 }
 
 function fmtTokens(n: number): string {
