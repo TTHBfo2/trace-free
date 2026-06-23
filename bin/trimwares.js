@@ -471,11 +471,32 @@ if (command === 'serve') {
     }
   });
 
+  function filterByProject(entries, project) {
+    if (!project) return entries;
+    return entries.filter(e => e.labels?.project === project);
+  }
+
   function handleRequest(req, res) {
     res.setHeader('Access-Control-Allow-Origin', 'http://localhost:7777');
 
-    if (req.url === '/api/data') {
-      const entries     = loadSessionEntries();
+    const qs      = new URL(req.url, 'http://localhost').searchParams;
+    const project = qs.get('project') || null;
+    const urlPath = req.url.split('?')[0];
+
+    // ── Projects list ───────────────────────────────────────────────────────────
+    if (urlPath === '/api/projects') {
+      const all = [...loadSessionEntries(), ...loadHistoryEntries()];
+      const seen = new Set();
+      for (const e of all) {
+        if (e.labels?.project) seen.add(e.labels.project);
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ projects: [...seen].sort() }));
+      return;
+    }
+
+    if (urlPath === '/api/data') {
+      const entries     = filterByProject(loadSessionEntries(), project);
       const waste       = deriveWasteReport(entries);
       const sessionAgg  = aggregateSessionAttribution(entries);
       const sessionCost = aggregateSessionCost(entries);
@@ -492,15 +513,15 @@ if (command === 'serve') {
       return;
     }
 
-    if (req.url === '/api/history') {
-      const entries = loadHistoryEntries();
+    if (urlPath === '/api/history') {
+      const entries = filterByProject(loadHistoryEntries(), project);
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify(groupHistoryByDay(entries)));
       return;
     }
 
     // ── License info ────────────────────────────────────────────────────────────
-    if (req.url === '/api/license') {
+    if (urlPath === '/api/license') {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       const expires = license.exp ? new Date(license.exp * 1000).toISOString().split('T')[0] : null;
       res.end(JSON.stringify({ tier: license.tier ?? 'pro', email: license.email ?? '', expires }));
@@ -508,7 +529,7 @@ if (command === 'serve') {
     }
 
     // ── Alert config GET ────────────────────────────────────────────────────────
-    if (req.method === 'GET' && req.url === '/api/alerts/config') {
+    if (req.method === 'GET' && urlPath === '/api/alerts/config') {
       const cfg = loadAlertsConfig();
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify(cfg));
@@ -516,7 +537,7 @@ if (command === 'serve') {
     }
 
     // ── Alert config POST (save thresholds) ─────────────────────────────────────
-    if (req.method === 'POST' && req.url === '/api/alerts/config') {
+    if (req.method === 'POST' && urlPath === '/api/alerts/config') {
       let body = '';
       req.on('data', chunk => { body += chunk; });
       req.on('end', () => {
@@ -533,7 +554,7 @@ if (command === 'serve') {
     }
 
     // ── Alerts evaluation ───────────────────────────────────────────────────────
-    if (req.url === '/api/alerts') {
+    if (urlPath === '/api/alerts') {
       const cfg     = loadAlertsConfig();
       const history = groupHistoryByDay(loadHistoryEntries());
       const days    = history.days.map(d => ({
@@ -548,7 +569,7 @@ if (command === 'serve') {
     }
 
     // ── Export ──────────────────────────────────────────────────────────────────
-    if (req.url?.startsWith('/api/export')) {
+    if (urlPath.startsWith('/api/export')) {
       const fmt = new URL(req.url, 'http://localhost').searchParams.get('format') ?? 'json';
       const entries = loadSessionEntries();
       const history = groupHistoryByDay(loadHistoryEntries());
@@ -616,7 +637,6 @@ if (command === 'serve') {
       return;
     }
 
-    const urlPath  = req.url.split('?')[0];
     let   filePath = join(UI_DIR, urlPath);
     // No file extension → could be a directory route (e.g. /attribution/)
     // Always resolve to index.html for extensionless paths
