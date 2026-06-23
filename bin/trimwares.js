@@ -242,11 +242,11 @@ if (command === 'serve') {
   const license = await requireProLicense();
 
   const { createServer }                          = await import('http');
-  const { readFileSync, existsSync, readdirSync } = await import('fs');
+  const { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } = await import('fs');
   const { join, resolve, extname }                = await import('path');
   const { fileURLToPath }                         = await import('url');
   const { exec }                                  = await import('child_process');
-  const { buildRules, evaluateAlerts }            = await import('../src/telemetry/AlertEngine.js').catch(() => ({ buildRules: () => [], evaluateAlerts: () => [] }));
+  const { buildRules, evaluateAlerts }            = await import('../dist/telemetry/AlertEngine.js').catch(() => ({ buildRules: () => [], evaluateAlerts: () => [] }));
 
   const PORT   = 7777;
   const __dir  = fileURLToPath(new URL('.', import.meta.url));
@@ -496,6 +496,14 @@ if (command === 'serve') {
       const entries = loadHistoryEntries();
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify(groupHistoryByDay(entries)));
+      return;
+    }
+
+    // ── License info ────────────────────────────────────────────────────────────
+    if (req.url === '/api/license') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      const expires = license.exp ? new Date(license.exp * 1000).toISOString().split('T')[0] : null;
+      res.end(JSON.stringify({ tier: license.tier ?? 'pro', email: license.email ?? '', expires }));
       return;
     }
 
