@@ -158,6 +158,82 @@ if (command === 'clear') {
   process.exit(0);
 }
 
+// ─── check (CI gate) ─────────────────────────────────────────────────────────
+
+if (command === 'check') {
+  const { readFileSync, existsSync } = await import('fs');
+  const { resolve } = await import('path');
+
+  const flags = Object.fromEntries(
+    rest.reduce((acc, arg, i, arr) => {
+      if (arg.startsWith('--')) acc.push([arg.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase()), arr[i + 1]]);
+      return acc;
+    }, [])
+  );
+
+  const maxDailyCost    = flags.maxDailyCost    ? parseFloat(flags.maxDailyCost)    : null;
+  const minCacheRate    = flags.minCacheRate     ? parseFloat(flags.minCacheRate)    : null;
+  const maxToolPct      = flags.maxToolPct       ? parseFloat(flags.maxToolPct)      : null;
+  const maxMonthlySpend = flags.maxMonthlySpend  ? parseFloat(flags.maxMonthlySpend) : null;
+
+  const histPath = resolve(process.cwd(), '.trimwares/history.jsonl');
+  if (!existsSync(histPath)) {
+    console.log('\n  \x1b[33m⚠ No history data found — nothing to check.\x1b[0m\n');
+    process.exit(0);
+  }
+
+  const entries = readFileSync(histPath, 'utf8')
+    .split('\n').filter(Boolean)
+    .flatMap(l => { try { return [JSON.parse(l)]; } catch { return []; } });
+
+  // Aggregate by day
+  const byDay = {};
+  let totalCached = 0, totalRequests = 0, totalMonthSpend = 0, totalToolCost = 0, totalSpend = 0;
+  for (const e of entries) {
+    const day = new Date(e.timestamp).toISOString().split('T')[0];
+    if (!byDay[day]) byDay[day] = { spend: 0, requests: 0 };
+    const cost = e.realCost ?? e.attribution?.totalCost ?? 0;
+    const savings = e.realSavings ?? (e.cached ? cost : 0);
+    byDay[day].spend    += cost;
+    byDay[day].requests += 1;
+    totalRequests++;
+    if (e.cached) totalCached++;
+    totalMonthSpend += cost;
+    totalSpend      += cost;
+    totalToolCost   += (e.attribution?.toolSchemas?.estimatedCost ?? 0) * (cost / (e.attribution?.totalCost || 1));
+  }
+
+  const days        = Object.values(byDay).sort((a, b) => a.date < b.date ? -1 : 1);
+  const todaySpend  = days[days.length - 1]?.spend ?? 0;
+  const cacheRate   = totalRequests > 0 ? totalCached / totalRequests : 0;
+  const toolPct     = totalSpend > 0 ? totalToolCost / totalSpend : 0;
+
+  let passed = 0; let failed = 0;
+  const W = 38;
+  console.log('\n  \x1b[1m⚡ Trimwares CI Check\x1b[0m\n');
+
+  function checkLine(label, pass, actual, limit, unit) {
+    const icon = pass ? '\x1b[32m✓\x1b[0m' : '\x1b[31m✗\x1b[0m';
+    const val  = `${actual} ${unit}`;
+    const lim  = `(limit: ${limit} ${unit})`;
+    console.log(`  ${icon}  ${label.padEnd(W)} ${pass ? '\x1b[32m' : '\x1b[31m'}${val}\x1b[0m  \x1b[90m${lim}\x1b[0m`);
+    if (pass) passed++; else failed++;
+  }
+
+  if (maxDailyCost !== null)    checkLine('Today\'s spend',       todaySpend  <= maxDailyCost,  `$${todaySpend.toFixed(6)}`,       `$${maxDailyCost.toFixed(2)}`,     '');
+  if (maxMonthlySpend !== null) checkLine('30-day total spend',   totalMonthSpend <= maxMonthlySpend, `$${totalMonthSpend.toFixed(4)}`, `$${maxMonthlySpend.toFixed(2)}`, '');
+  if (minCacheRate !== null)    checkLine('Cache hit rate',       cacheRate   >= minCacheRate,  `${(cacheRate * 100).toFixed(1)}%`, `${(minCacheRate * 100).toFixed(0)}%`, '');
+  if (maxToolPct !== null)      checkLine('Tool schema overhead', toolPct     <= maxToolPct,    `${(toolPct * 100).toFixed(1)}%`,   `${(maxToolPct * 100).toFixed(0)}%`,  '');
+
+  if (passed + failed === 0) {
+    console.log('  No thresholds specified. Use --max-daily-cost, --min-cache-rate, --max-tool-pct, --max-monthly-spend\n');
+    process.exit(0);
+  }
+
+  console.log(`\n  ${passed} passed  ${failed > 0 ? '\x1b[31m' + failed + ' FAILED\x1b[0m' : '0 failed'}\n`);
+  process.exit(failed > 0 ? 1 : 0);
+}
+
 // ─── serve ───────────────────────────────────────────────────────────────────
 
 if (command === 'serve') {
@@ -232,6 +308,20 @@ if (command === 'serve') {
       if (!files.length) return null;
       return JSON.parse(readFileSync(join(simDir, files[0]), 'utf8'));
     } catch { return null; }
+  }
+
+  const ALERTS_CONFIG_PATH = resolve(process.cwd(), '.trimwares/alerts.json');
+
+  function loadAlertsConfig() {
+    if (!existsSync(ALERTS_CONFIG_PATH)) return {};
+    try { return JSON.parse(readFileSync(ALERTS_CONFIG_PATH, 'utf8')); } catch { return {}; }
+  }
+
+  function saveAlertsConfig(cfg) {
+    try {
+      mkdirSync(resolve(process.cwd(), '.trimwares'), { recursive: true });
+      writeFileSync(ALERTS_CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf8');
+    } catch { /* non-fatal */ }
   }
 
   // realCost/realSavings come from CostEngine (actual provider usage tokens).
@@ -405,6 +495,110 @@ if (command === 'serve') {
       const entries = loadHistoryEntries();
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify(groupHistoryByDay(entries)));
+      return;
+    }
+
+    // ── Alert config GET ────────────────────────────────────────────────────────
+    if (req.method === 'GET' && req.url === '/api/alerts/config') {
+      const cfg = loadAlertsConfig();
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify(cfg));
+      return;
+    }
+
+    // ── Alert config POST (save thresholds) ─────────────────────────────────────
+    if (req.method === 'POST' && req.url === '/api/alerts/config') {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        try {
+          const cfg = JSON.parse(body);
+          saveAlertsConfig(cfg);
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: true }));
+        } catch {
+          res.writeHead(400); res.end('Bad JSON');
+        }
+      });
+      return;
+    }
+
+    // ── Alerts evaluation ───────────────────────────────────────────────────────
+    if (req.url === '/api/alerts') {
+      const cfg     = loadAlertsConfig();
+      const history = groupHistoryByDay(loadHistoryEntries());
+      const days    = history.days.map(d => ({
+        date: d.date, spend: d.spend, saved: d.saved, requests: d.requests,
+        cached: 0, toolCost: 0,
+      }));
+      const { buildRules, evaluateAlerts } = await import('../src/telemetry/AlertEngine.js').catch(() => ({ buildRules: () => [], evaluateAlerts: () => [] }));
+      const rules     = buildRules(cfg);
+      const triggered = evaluateAlerts(days, cfg);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ rules, triggered, config: cfg }));
+      return;
+    }
+
+    // ── Export ──────────────────────────────────────────────────────────────────
+    if (req.url?.startsWith('/api/export')) {
+      const fmt = new URL(req.url, 'http://localhost').searchParams.get('format') ?? 'json';
+      const entries = loadSessionEntries();
+      const history = groupHistoryByDay(loadHistoryEntries());
+      const waste   = deriveWasteReport(entries);
+
+      if (fmt === 'csv') {
+        const header = 'timestamp,requestId,provider,model,inputTokens,outputTokens,cost,savings,cached,latencyMs\n';
+        const rows = entries.map(e =>
+          [e.timestamp, e.requestId, e.provider, e.model,
+           e.realInputTokens ?? 0, e.realOutputTokens ?? 0,
+           (e.realCost ?? 0).toFixed(6), (e.realSavings ?? 0).toFixed(6),
+           e.cached ? 'true' : 'false', e.latencyMs ?? 0].join(',')
+        ).join('\n');
+        res.writeHead(200, {
+          'Content-Type': 'text/csv; charset=utf-8',
+          'Content-Disposition': 'attachment; filename="trimwares-export.csv"',
+        });
+        res.end(header + rows);
+        return;
+      }
+
+      if (fmt === 'md') {
+        const totalSpend = waste.currentSpend;
+        const saved      = waste.alreadySaved;
+        const md = [
+          '# Trimwares Trace — Cost Report',
+          '',
+          `**Generated:** ${new Date().toISOString().split('T')[0]}`,
+          `**Requests:** ${entries.length}  |  **Spend:** $${totalSpend.toFixed(6)}  |  **Saved:** $${saved.toFixed(6)}`,
+          '',
+          '## 30-Day History',
+          '',
+          '| Date | Spend | Saved | Requests |',
+          '|------|-------|-------|----------|',
+          ...(history.days.slice().reverse().map(d =>
+            `| ${d.date} | $${d.spend.toFixed(6)} | $${d.saved.toFixed(6)} | ${d.requests} |`
+          )),
+          '',
+          '## Spend by Category',
+          '',
+          ...waste.categories.map(c =>
+            `- **${c.label}**: $${c.cost.toFixed(6)} (${c.percentOfSpend}% of spend)`
+          ),
+        ].join('\n');
+        res.writeHead(200, {
+          'Content-Type': 'text/markdown; charset=utf-8',
+          'Content-Disposition': 'attachment; filename="trimwares-report.md"',
+        });
+        res.end(md);
+        return;
+      }
+
+      // Default: JSON
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Content-Disposition': 'attachment; filename="trimwares-export.json"',
+      });
+      res.end(JSON.stringify({ exportedAt: new Date().toISOString(), waste, history, entries }, null, 2));
       return;
     }
 

@@ -59,6 +59,7 @@ export interface SessionLogEntry {
   nativeCachedTokens: number;    // cache_read_input_tokens (or equivalent), billed at the discounted rate
   realCost: number;              // actual cost of this request (0 if served from response cache)
   realSavings: number;           // cost avoided: full cost if response-cache hit, else native-cache discount
+  labels?: Record<string, string>; // optional user-defined labels: { project, env, customer, ... }
 }
 
 // ─── Provider ─────────────────────────────────────────────────────────────────
@@ -323,4 +324,10 @@ export interface TrimmerConfig {
     filterToolSchemas?: boolean;
   };
   pricing?: Partial<Record<string, ModelPricing>>;
+  /**
+   * Project labels attached to every request in this session.
+   * Useful for grouping spend by project, environment, customer, or feature.
+   * Example: { project: 'chat', env: 'prod', customer: 'acme' }
+   */
+  labels?: Record<string, string>;
 }

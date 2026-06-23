@@ -88,6 +88,7 @@ export class LLMCostTrimmer {
         filterToolSchemas:    config.optimization?.filterToolSchemas    ?? true,  // on by default — conservative fallback
       },
       pricing: config.pricing ?? {},
+      labels:  config.labels  ?? {},
     };
 
     const rc = this.config.cache.response as { ttlMs: number; maxEntries: number };

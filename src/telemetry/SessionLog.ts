@@ -1,14 +1,16 @@
 import { createHash } from 'crypto';
-import { writeFileSync, mkdirSync, readFileSync, existsSync } from 'fs';
+import { writeFileSync, mkdirSync, readFileSync, existsSync, statSync } from 'fs';
 import { join } from 'path';
 import { SessionLogEntry } from '../types/index.js';
 
 // Writes metadata-only session logs to .trimwares/session.jsonl and history.jsonl
 // NEVER stores prompt content, response content, or API keys — only counts and costs.
 
-const LOG_DIR   = '.trimwares';
-const LOG_FILE  = 'session.jsonl';
-const HIST_FILE = 'history.jsonl';
+const LOG_DIR    = '.trimwares';
+const LOG_FILE   = 'session.jsonl';
+const HIST_FILE  = 'history.jsonl';
+const MAX_BYTES  = 10 * 1024 * 1024;  // 10 MB hard cap per file
+const KEEP_BYTES =  5 * 1024 * 1024;  // trim to last 5 MB (newest entries)
 
 export class SessionLog {
   private logPath: string;
@@ -39,8 +41,26 @@ export class SessionLog {
       const line = JSON.stringify(entry) + '\n';
       writeFileSync(this.logPath,     line, { flag: 'a', encoding: 'utf8' });
       writeFileSync(this.historyPath, line, { flag: 'a', encoding: 'utf8' });
+      this.compactIfNeeded(this.logPath);
+      this.compactIfNeeded(this.historyPath);
     } catch {
       // non-fatal — never crash the app over telemetry
+    }
+  }
+
+  private compactIfNeeded(filePath: string): void {
+    try {
+      if (!existsSync(filePath)) return;
+      const size = statSync(filePath).size;
+      if (size <= MAX_BYTES) return;
+      // Read the tail (KEEP_BYTES from end), find the first complete line boundary
+      const content = readFileSync(filePath, 'utf8');
+      const trimmed = content.slice(-KEEP_BYTES);
+      const firstNewline = trimmed.indexOf('\n');
+      const clean = firstNewline >= 0 ? trimmed.slice(firstNewline + 1) : trimmed;
+      writeFileSync(filePath, clean, { encoding: 'utf8' });
+    } catch {
+      // non-fatal
     }
   }
 

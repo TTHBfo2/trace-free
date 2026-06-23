@@ -81,6 +81,7 @@ export class TrimwareEngine {
         filterToolSchemas:    (config.optimization as { filterToolSchemas?: boolean })?.filterToolSchemas ?? true,
       },
       pricing: config.pricing ?? {},
+      labels:  config.labels  ?? {},
     };
 
     const rcf = this.config.cache.response as { ttlMs: number; maxEntries: number };
@@ -294,11 +295,13 @@ export class TrimwareEngine {
     // Pass provider-reported inputTokens so attribution categories are rescaled to
     // match the real total rather than the 4-char/token heuristic estimate.
     const attribution = this.attributor.attribute(request, outputTokens, pricing, inputTokens > 0 ? inputTokens : undefined);
+    const labels = (this.config as { labels?: Record<string, string> }).labels;
     this.sessionLog.write({
       timestamp: Date.now(), requestId, provider: this.provider, model, attribution,
       cached, cacheType, latencyMs, nativeCache,
       realInputTokens: inputTokens, realOutputTokens: outputTokens,
       nativeCachedTokens, realCost: costEntry.cost, realSavings: costEntry.savings,
+      ...(labels && Object.keys(labels).length > 0 ? { labels } : {}),
     });
   }
 }
