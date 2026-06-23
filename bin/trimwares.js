@@ -246,6 +246,7 @@ if (command === 'serve') {
   const { join, resolve, extname }                = await import('path');
   const { fileURLToPath }                         = await import('url');
   const { exec }                                  = await import('child_process');
+  const { buildRules, evaluateAlerts }            = await import('../src/telemetry/AlertEngine.js').catch(() => ({ buildRules: () => [], evaluateAlerts: () => [] }));
 
   const PORT   = 7777;
   const __dir  = fileURLToPath(new URL('.', import.meta.url));
@@ -531,7 +532,6 @@ if (command === 'serve') {
         date: d.date, spend: d.spend, saved: d.saved, requests: d.requests,
         cached: 0, toolCost: 0,
       }));
-      const { buildRules, evaluateAlerts } = await import('../src/telemetry/AlertEngine.js').catch(() => ({ buildRules: () => [], evaluateAlerts: () => [] }));
       const rules     = buildRules(cfg);
       const triggered = evaluateAlerts(days, cfg);
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
