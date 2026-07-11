@@ -303,6 +303,50 @@ if (command === 'clear') {
   process.exit(0);
 }
 
+// ─── deactivate ──────────────────────────────────────────────────────────────
+
+if (command === 'deactivate') {
+  const cfg = await loadConfig();
+  if (!cfg?.activationToken) {
+    console.error('\n  \x1b[31m✗ No active license found on this machine\x1b[0m');
+    console.error('  Run \x1b[33mnpx trimwares login --key YOUR_KEY\x1b[0m to activate first.\n');
+    process.exit(1);
+  }
+
+  const machineId = await getMachineId();
+  process.stdout.write('\n  Deactivating this machine… ');
+
+  try {
+    const res = await fetch(`${WORKER_URL}/deactivate`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ token: cfg.activationToken, machineId }),
+      signal:  AbortSignal.timeout(10000),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      console.error(`\n  \x1b[31m✗ ${data.error ?? 'Deactivation failed'}\x1b[0m\n`);
+      process.exit(1);
+    }
+    console.log('✓');
+    console.log(`  \x1b[90mSlots available: ${data.slotsAvailable ?? '?'} of 3\x1b[0m`);
+  } catch (e) {
+    console.error(`\n  \x1b[31m✗ Could not reach server: ${e.message}\x1b[0m`);
+    console.error('  Your local license has been removed anyway.\n');
+  }
+
+  // Always clear local config regardless of network outcome
+  const { existsSync, unlinkSync } = await import('fs');
+  const { join } = await import('path');
+  const { homedir } = await import('os');
+  const configPath = join(homedir(), '.trimwares', 'config.json');
+  if (existsSync(configPath)) unlinkSync(configPath);
+
+  console.log('\n  \x1b[32m✓ License removed from this machine\x1b[0m');
+  console.log('  Re-activate any time with \x1b[33mnpx trimwares login --key YOUR_KEY\x1b[0m\n');
+  process.exit(0);
+}
+
 // ─── check (CI gate) ─────────────────────────────────────────────────────────
 
 if (command === 'check') {
