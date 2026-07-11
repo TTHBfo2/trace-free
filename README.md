@@ -66,6 +66,7 @@ That's it. The package writes a local metadata log (`.trimwares/session.jsonl`) 
 | `npx trimwares serve` | **Pro** — opens local dashboard at localhost:7777, live polling |
 | `npx trimwares login --key KEY` | Activate a Pro license key |
 | `npx trimwares clear` | Clear current session log |
+| `npx trimwares check` | CI gate — fails if spend/cache/tool% exceed configured thresholds |
 
 ---
 
@@ -77,12 +78,29 @@ That's it. The package writes a local metadata log (`.trimwares/session.jsonl`) 
 | `npx trimwares analyze` — terminal report | ✓ | ✓ |
 | Session log (`.trimwares/session.jsonl`) | ✓ | ✓ |
 | `npx trimwares serve` — local dashboard | — | ✓ |
-| 30-day history across sessions | — | ✓ |
-| Daily spend chart + session breakdown | — | ✓ |
-| License required | None | Annual · [trace.trimwares.com](https://trace.trimwares.com) |
+| 30-day history + spend chart | — | ✓ |
+| Model breakdown + cache rates | — | ✓ |
+| Alert rules + export (JSON/CSV/Markdown) | — | ✓ |
+| License required | None | $19/mo · [trimwares.com/pro](https://trimwares.com/pro) |
 | Data leaves your machine | Never | Never |
 
 Pro license is verified **offline** using an Ed25519 signature — no server round-trip, no account required to use the dashboard after activation.
+
+---
+
+## Getting started with Pro
+
+1. **Purchase** at [trimwares.com/pro](https://trimwares.com/pro) — $19/month
+2. **Check your email** — your license key arrives instantly after checkout
+3. **Activate** in your project directory:
+   ```bash
+   npx trimwares login --key <your-license-key>
+   ```
+4. **Open the dashboard:**
+   ```bash
+   npx trimwares serve
+   ```
+   Dashboard opens at [localhost:7777](http://localhost:7777) — 30-day history, model breakdown, alerts, and export.
 
 ---
 

@@ -1,11 +1,28 @@
 // Alert detection engine — reads history data and compares against user-defined thresholds.
-// All computation is local; no network calls.
+// All computation is local; no network calls. Nothing is blocked — thresholds only trigger notifications.
+
+export type NotificationMode = 'once' | 'moderate' | 'persistent';
+
+export interface AlertNotification {
+  mode:             NotificationMode; // once = first crossing only; moderate = every N min; persistent = every poll
+  intervalMinutes?: number;           // for 'moderate', default 5
+}
 
 export interface AlertConfig {
-  maxDailySpend?:       number;   // USD — fire if today's spend exceeds this
-  spendSpikePercent?:   number;   // % — fire if today > (7-day avg * (1 + pct/100))
-  minCacheHitRate?:     number;   // 0–1 — fire if hit rate falls below this
-  maxToolSchemaPct?:    number;   // 0–1 — fire if tool schema % of spend exceeds this
+  // Multiple spend notification amounts (e.g. [5, 8] → notify at $5 and again at $8).
+  // Replaces the old single maxDailySpend field. Migration: if maxDailySpend exists and
+  // spendThresholds is absent, it is normalised to [maxDailySpend] at load time.
+  spendThresholds?:   number[];  // USD amounts — fire when today's spend crosses each one
+  spendSpikePercent?: number;    // % — fire if today > (7-day avg * (1 + pct/100))
+  minCacheHitRate?:   number;    // 0–1 — fire if hit rate falls below this
+  maxToolSchemaPct?:  number;    // 0–1 — fire if tool schema % of spend exceeds this
+  sound?:             boolean;   // play a system sound with each notification
+  notifications?: {
+    spend_threshold?: AlertNotification;  // shared mode for all spend threshold alerts
+    spend_spike?:     AlertNotification;
+    cache_rate_drop?: AlertNotification;
+    tool_schema_pct?: AlertNotification;
+  };
 }
 
 export interface AlertRule {
@@ -40,19 +57,20 @@ export interface DayEntry {
 export function buildRules(config: AlertConfig): AlertRule[] {
   const rules: AlertRule[] = [];
 
-  if (config.maxDailySpend !== undefined) {
+  for (const amt of config.spendThresholds ?? []) {
     rules.push({
-      id: 'spend_threshold', type: 'spend_threshold',
-      label: 'Daily spend limit',
-      description: `Alert when today's spend exceeds $${config.maxDailySpend.toFixed(2)}`,
-      threshold: config.maxDailySpend, unit: 'USD/day',
+      id: `spend_at_${amt.toFixed(2)}`, type: 'spend_threshold',
+      label: `Spend reaches $${amt.toFixed(2)}`,
+      description: `Notify when today's spend crosses $${amt.toFixed(2)} — no API calls are blocked`,
+      threshold: amt, unit: 'USD/day',
     });
   }
+
   if (config.spendSpikePercent !== undefined) {
     rules.push({
       id: 'spend_spike', type: 'spend_spike',
       label: 'Spend spike',
-      description: `Alert when today's spend is more than ${config.spendSpikePercent}% above the 7-day average`,
+      description: `Notify when today's spend is more than ${config.spendSpikePercent}% above the 7-day average`,
       threshold: config.spendSpikePercent, unit: '%',
     });
   }
@@ -60,7 +78,7 @@ export function buildRules(config: AlertConfig): AlertRule[] {
     rules.push({
       id: 'cache_rate_drop', type: 'cache_rate_drop',
       label: 'Cache hit rate drop',
-      description: `Alert when cache hit rate falls below ${(config.minCacheHitRate * 100).toFixed(0)}%`,
+      description: `Notify when cache hit rate falls below ${(config.minCacheHitRate * 100).toFixed(0)}%`,
       threshold: config.minCacheHitRate, unit: '%',
     });
   }
@@ -68,7 +86,7 @@ export function buildRules(config: AlertConfig): AlertRule[] {
     rules.push({
       id: 'tool_schema_pct', type: 'tool_schema_pct',
       label: 'Tool schema overhead',
-      description: `Alert when tool schemas exceed ${(config.maxToolSchemaPct * 100).toFixed(0)}% of spend`,
+      description: `Notify when tool schemas exceed ${(config.maxToolSchemaPct * 100).toFixed(0)}% of spend`,
       threshold: config.maxToolSchemaPct, unit: '%',
     });
   }
@@ -82,7 +100,6 @@ export function evaluateAlerts(days: DayEntry[], config: AlertConfig): Triggered
   const triggered: TriggeredAlert[] = [];
   const now = Date.now();
 
-  // Today = most recent day entry
   const today = days[days.length - 1];
   if (!today) return [];
 
@@ -92,21 +109,22 @@ export function evaluateAlerts(days: DayEntry[], config: AlertConfig): Triggered
     ? prior7.reduce((s, d) => s + d.spend, 0) / prior7.length
     : 0;
 
-  // Total requests and cached requests across all days for cache hit rate
   const totalRequests = days.reduce((s, d) => s + d.requests, 0);
   const totalCached   = days.reduce((s, d) => s + d.cached,   0);
   const cacheRate     = totalRequests > 0 ? totalCached / totalRequests : 0;
 
-  // Tool schema pct of today's spend
   const toolPct = today.spend > 0 ? today.toolCost / today.spend : 0;
 
-  if (config.maxDailySpend !== undefined && today.spend > config.maxDailySpend) {
-    triggered.push({
-      ruleId: 'spend_threshold', type: 'spend_threshold',
-      label: 'Daily spend limit exceeded',
-      message: `Today's spend ($${today.spend.toFixed(4)}) exceeded your $${config.maxDailySpend.toFixed(2)} daily limit`,
-      value: today.spend, threshold: config.maxDailySpend, unit: 'USD', timestamp: now,
-    });
+  // One triggered alert per crossed spend threshold (sorted ascending so cheaper ones fire first)
+  for (const amt of (config.spendThresholds ?? []).slice().sort((a, b) => a - b)) {
+    if (today.spend > amt) {
+      triggered.push({
+        ruleId: `spend_at_${amt.toFixed(2)}`, type: 'spend_threshold',
+        label: `Spend reached $${amt.toFixed(2)}`,
+        message: `Today's spend ($${today.spend.toFixed(4)}) has crossed your $${amt.toFixed(2)} notification`,
+        value: today.spend, threshold: amt, unit: 'USD', timestamp: now,
+      });
+    }
   }
 
   if (config.spendSpikePercent !== undefined && avg7spend > 0) {

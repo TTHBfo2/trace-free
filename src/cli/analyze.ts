@@ -46,10 +46,11 @@ function fmtTokens(n: number): string {
 export interface AnalyzeOptions {
   entries: SessionLogEntry[];
   verbose?: boolean;
+  isPro?: boolean;
 }
 
 export function renderReport(options: AnalyzeOptions): string {
-  const { entries } = options;
+  const { entries, isPro = false } = options;
   if (entries.length === 0) {
     return `\n${yellow('No session data found.')} Run your app with LLMCostTrimmer first.\n`;
   }
@@ -158,8 +159,8 @@ export function renderReport(options: AnalyzeOptions): string {
     lines.push('');
   }
 
-  // ── Savings potential ─────────────────────────────────────────
-  if (potentialSaving > 0) {
+  // ── Savings potential (Pro only) ──────────────────────────────
+  if (isPro && potentialSaving > 0) {
     lines.push(sep);
     lines.push(`  ${bold('Savings opportunities')}`);
     lines.push('');
@@ -232,7 +233,7 @@ export function renderReport(options: AnalyzeOptions): string {
 
     for (const cat of wasteCats) {
       const icon    = SEVERITY_ICON[cat.severity] ?? '⚪';
-      const monthly = cat.projectedMonthlySaving && cat.projectedMonthlySaving > 0
+      const monthly = isPro && cat.projectedMonthlySaving && cat.projectedMonthlySaving > 0
         ? `  ${gray('→ fix saves ' + usd(cat.projectedMonthlySaving) + '/mo')}`
         : '';
       lines.push(`  ${icon} ${cat.label.padEnd(26)} ${bold(yellow(usd(cat.cost)))}${monthly}`);
@@ -241,7 +242,7 @@ export function renderReport(options: AnalyzeOptions): string {
     lines.push('');
     lines.push(`  ${cats.genuineWork.label.padEnd(28)} ${gray(usd(cats.genuineWork.cost))}  ${dim('(necessary spend)')}`);
 
-    if (enriched.recoverableSpend > 0) {
+    if (isPro && enriched.recoverableSpend > 0) {
       lines.push('');
       lines.push(`  ${bold('Recoverable this session')}  ${bold(green(usd(enriched.recoverableSpend)))}  ${dim(`(${enriched.recoverablePercent}% of current spend)`)}`);
       if (enriched.topFix) {
@@ -255,7 +256,11 @@ export function renderReport(options: AnalyzeOptions): string {
   lines.push(dim('  Prompt content is never stored. This report uses token counts only.'));
   lines.push(dim('  Token counts: BPE tokenizer (cl100k_base) — within ~2% of provider counts.'));
   lines.push(dim('  Costs: provider list pricing — verify exact amounts against your invoice.'));
-  lines.push(dim('  trace.trimwares.com for 30-day history, team analytics and more.'));
+  if (!isPro) {
+    lines.push(dim('  Pro: monthly savings recommendations + 30-day history — trimwares.com/pro'));
+  } else {
+    lines.push(dim('  Dashboard: npx trimwares serve · history, alerts, and full analytics.'));
+  }
   lines.push('');
 
   return lines.join('\n');

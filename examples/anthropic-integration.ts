@@ -2,7 +2,7 @@
  * Anthropic / Claude integration example.
  */
 
-import { LLMCostTrimmer, AnthropicProvider } from '@tthbfo2/llm-cost-trimmer';
+import { LLMCostTrimmer, AnthropicProvider } from '@trimwares/trace';
 import Anthropic from '@anthropic-ai/sdk';
 
 async function main() {

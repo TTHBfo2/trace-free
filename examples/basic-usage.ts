@@ -3,7 +3,7 @@
  * This shows the full API surface in one file.
  */
 
-import { LLMCostTrimmer, OpenAIProvider } from '@tthbfo2/llm-cost-trimmer';
+import { LLMCostTrimmer, OpenAIProvider } from '@trimwares/trace';
 import OpenAI from 'openai';
 
 async function main() {

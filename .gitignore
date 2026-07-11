@@ -12,3 +12,6 @@ coverage/
 
 tests/blackbox/node_modules/
 tests/blackbox/package-lock.json
+
+workers/**/.credentials
+workers/**/.dev.vars

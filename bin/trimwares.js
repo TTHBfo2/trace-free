@@ -3,16 +3,23 @@
 
 import { SessionLog }   from '../dist/telemetry/index.js';
 import { renderReport } from '../dist/cli/analyze.js';
+import { fileURLToPath } from 'node:url';
+
+const _iconPath = (() => {
+  try { return fileURLToPath(new URL('../assets/icon.png', import.meta.url)); } catch { return undefined; }
+})();
 
 const [,, command = 'analyze', ...rest] = process.argv;
 
 // ─── License verification ─────────────────────────────────────────────────────
 
-const PUBLIC_KEY_B64 = 'MCowBQYDK2VwAyEA+WiFm3fBMP/eHXnHqNN2aEXTlMbJLq51We0DcAN2nL8=';
+const PUBLIC_KEY_B64  = 'MCowBQYDK2VwAyEA+WiFm3fBMP/eHXnHqNN2aEXTlMbJLq51We0DcAN2nL8=';
+const WORKER_URL      = process.env.TRIMWARES_WORKER_URL ?? 'https://license.trimwares.com';
+const TOKEN_GRACE_SEC = 7 * 86400; // 7 days grace after token expiry
 
-async function verifyLicenseKey(keyStr) {
-  if (!keyStr || typeof keyStr !== 'string') return null;
-  const parts = keyStr.trim().split('.');
+async function verifySignedToken(tokenStr) {
+  if (!tokenStr || typeof tokenStr !== 'string') return null;
+  const parts = tokenStr.trim().split('.');
   if (parts.length !== 2) return null;
   const [payloadB64, sigB64] = parts;
   try {
@@ -32,57 +39,153 @@ async function verifyLicenseKey(keyStr) {
   }
 }
 
-async function loadStoredLicense() {
+async function getMachineId() {
+  const { existsSync, readFileSync, writeFileSync, mkdirSync } = await import('fs');
+  const { join }    = await import('path');
+  const { homedir } = await import('os');
+  const dir  = join(homedir(), '.trimwares');
+  const path = join(dir, 'machine-id');
+  if (existsSync(path)) return readFileSync(path, 'utf8').trim();
+  const { randomUUID } = await import('crypto');
+  const id = randomUUID();
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path, id, 'utf8');
+  return id;
+}
+
+async function loadConfig() {
   const { existsSync, readFileSync } = await import('fs');
   const { join }    = await import('path');
   const { homedir } = await import('os');
   const configPath  = join(homedir(), '.trimwares', 'config.json');
   if (!existsSync(configPath)) return null;
-  try {
-    return JSON.parse(readFileSync(configPath, 'utf8'));
-  } catch { return null; }
+  try { return JSON.parse(readFileSync(configPath, 'utf8')); } catch { return null; }
 }
 
-async function requireProLicense() {
-  const config = await loadStoredLicense();
+async function saveConfig(data) {
+  const { writeFileSync, mkdirSync } = await import('fs');
+  const { join }    = await import('path');
+  const { homedir } = await import('os');
+  const dir  = join(homedir(), '.trimwares');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'config.json'), JSON.stringify(data, null, 2));
+}
 
-  if (!config?.licenseKey) {
-    console.error('\n  \x1b[31m✗ Pro license required\x1b[0m');
-    console.error('  \x1b[90m──────────────────────────────────────────\x1b[0m');
-    console.error('  The dashboard is a Pro feature.');
-    console.error('  Get a license at \x1b[36mtrimwares.com/pro\x1b[0m');
-    console.error('  Then activate it:\n');
-    console.error('    \x1b[33mnpx trimwares login --key YOUR_LICENSE_KEY\x1b[0m\n');
-    process.exit(1);
+// ─── Project registry ─────────────────────────────────────────────────────────
+
+async function loadProjectRegistry() {
+  const { existsSync, readFileSync } = await import('fs');
+  const { join }    = await import('path');
+  const { homedir } = await import('os');
+  const p = join(homedir(), '.trimwares', 'projects.json');
+  if (!existsSync(p)) return [];
+  try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return []; }
+}
+
+async function saveProjectRegistry(projects) {
+  const { writeFileSync, mkdirSync } = await import('fs');
+  const { join }    = await import('path');
+  const { homedir } = await import('os');
+  const dir = join(homedir(), '.trimwares');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'projects.json'), JSON.stringify(projects, null, 2));
+}
+
+async function tryRefreshToken(activationToken, machineId) {
+  try {
+    const res = await fetch(`${WORKER_URL}/refresh`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ token: activationToken, machineId }),
+      signal:  AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.token ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function requireProLicense(feature = 'This feature') {
+  const config = await loadConfig();
+
+  // ── New flow: check activation token ────────────────────────────────────────
+  if (config?.activationToken) {
+    const payload = await verifySignedToken(config.activationToken);
+
+    if (!payload) {
+      console.error('\n  \x1b[31m✗ Activation token is invalid\x1b[0m');
+      console.error('  Re-run: \x1b[33mnpx trimwares login --key YOUR_LICENSE_KEY\x1b[0m\n');
+      process.exit(1);
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    const exp = payload.tokenExpires ?? 0;
+
+    if (exp < now) {
+      // Within grace period — try to refresh silently
+      if (now - exp < TOKEN_GRACE_SEC) {
+        const machineId = await getMachineId();
+        const newToken  = await tryRefreshToken(config.activationToken, machineId);
+        if (newToken) {
+          await saveConfig({ ...config, activationToken: newToken });
+        } else {
+          console.error('\n  \x1b[33m⚠  Could not refresh license token (offline?)\x1b[0m');
+          console.error('  Running on grace period. Connect to the internet and restart.\n');
+        }
+      } else {
+        // Beyond grace — try one final refresh before blocking
+        const machineIdFinal = await getMachineId();
+        const finalToken     = await tryRefreshToken(config.activationToken, machineIdFinal);
+        if (finalToken) {
+          await saveConfig({ ...config, activationToken: finalToken });
+        } else {
+          // No network and token expired — fail open rather than lock the user out
+          console.error('\n  \x1b[33m⚠  License token expired and could not be refreshed (offline?)\x1b[0m');
+          console.error('  Dashboard starting in limited mode. Reconnect to the internet to renew.\n');
+          return payload;
+        }
+      }
+    } else if (exp - now < 7 * 86400) {
+      // Near expiry — refresh silently in background
+      getMachineId().then(machineId =>
+        tryRefreshToken(config.activationToken, machineId).then(newToken => {
+          if (newToken) saveConfig({ ...config, activationToken: newToken });
+        }),
+      ).catch(() => {});
+    }
+
+    const validTiers = ['pro', 'team', 'enterprise'];
+    if (!validTiers.includes(payload.tier)) {
+      console.error('\n  \x1b[31m✗ This license does not include the dashboard\x1b[0m');
+      console.error('  Upgrade at \x1b[36mtrimwares.com/pro\x1b[0m\n');
+      process.exit(1);
+    }
+
+    return payload;
   }
 
-  const payload = await verifyLicenseKey(config.licenseKey);
-
-  if (!payload) {
-    console.error('\n  \x1b[31m✗ Invalid license key\x1b[0m');
-    console.error('  Your key could not be verified. It may have been tampered with.');
-    console.error('  Re-run: \x1b[33mnpx trimwares login --key YOUR_LICENSE_KEY\x1b[0m');
-    console.error('  Or contact support at \x1b[36mtrimwares.com/support\x1b[0m\n');
-    process.exit(1);
+  // ── Legacy fallback: bare license key (pre-Worker) ──────────────────────────
+  if (config?.licenseKey) {
+    const payload = await verifySignedToken(config.licenseKey);
+    if (payload) {
+      const now = Math.floor(Date.now() / 1000);
+      if (!payload.exp || payload.exp > now) {
+        console.error('\n  \x1b[33m⚠  Please re-activate your license to continue\x1b[0m');
+        console.error('  Run: \x1b[33mnpx trimwares login --key YOUR_LICENSE_KEY\x1b[0m\n');
+        process.exit(1);
+      }
+    }
   }
 
-  const now = Math.floor(Date.now() / 1000);
-  if (payload.exp && payload.exp < now) {
-    const expired = new Date(payload.exp * 1000).toISOString().split('T')[0];
-    console.error(`\n  \x1b[31m✗ License expired on ${expired}\x1b[0m`);
-    console.error('  Renew at \x1b[36mtrimwares.com/pro\x1b[0m');
-    console.error('  Then: \x1b[33mnpx trimwares login --key YOUR_NEW_KEY\x1b[0m\n');
-    process.exit(1);
-  }
-
-  const validTiers = ['pro', 'team', 'enterprise'];
-  if (!validTiers.includes(payload.tier)) {
-    console.error('\n  \x1b[31m✗ This license does not include the dashboard\x1b[0m');
-    console.error('  Upgrade at \x1b[36mtrimwares.com/pro\x1b[0m\n');
-    process.exit(1);
-  }
-
-  return payload;
+  console.error('\n  \x1b[31m✗ Pro license required\x1b[0m');
+  console.error('  \x1b[90m──────────────────────────────────────────\x1b[0m');
+  console.error(`  ${feature} is a Pro feature.`);
+  console.error('  Get a license at \x1b[36mtrimwares.com/pro\x1b[0m');
+  console.error('  Then activate it:\n');
+  console.error('    \x1b[33mnpx trimwares login --key YOUR_LICENSE_KEY\x1b[0m\n');
+  process.exit(1);
 }
 
 // ─── analyze ─────────────────────────────────────────────────────────────────
@@ -90,7 +193,23 @@ async function requireProLicense() {
 if (command === 'analyze') {
   const log     = new SessionLog();
   const entries = log.readAll();
-  process.stdout.write(renderReport({ entries }));
+
+  // Silently check Pro status — free users see attribution data, Pro sees recommendations
+  let isPro = false;
+  try {
+    const cfg = await loadConfig();
+    if (cfg?.activationToken) {
+      const payload = await verifySignedToken(cfg.activationToken);
+      if (payload) {
+        const now = Math.floor(Date.now() / 1000);
+        const exp = payload.tokenExpires ?? payload.exp ?? 0;
+        const validTiers = ['pro', 'team', 'enterprise'];
+        isPro = validTiers.includes(payload.tier) && (exp === 0 || exp > now - TOKEN_GRACE_SEC);
+      }
+    }
+  } catch { /* silent — always show free output on any error */ }
+
+  process.stdout.write(renderReport({ entries, isPro }));
   process.exit(0);
 }
 
@@ -104,46 +223,72 @@ if (command === 'login') {
   }
   const keyStr = rest[keyFlag + 1];
 
-  console.log('\n  Verifying license key…');
-
-  const payload = await verifyLicenseKey(keyStr);
-
-  if (!payload) {
+  // Step 1: verify signature locally before hitting the network
+  process.stdout.write('\n  Verifying license key… ');
+  const localPayload = await verifySignedToken(keyStr);
+  if (!localPayload) {
     console.error('\n  \x1b[31m✗ Invalid license key\x1b[0m');
-    console.error('  The key signature could not be verified. Check that you copied it correctly.');
-    console.error('  If this keeps happening, contact \x1b[36mtrimwares.com/support\x1b[0m\n');
+    console.error('  The signature could not be verified. Check that you copied it correctly.');
+    console.error('  Contact \x1b[36mtrimwares.com/support\x1b[0m if this keeps happening.\n');
     process.exit(1);
   }
-
   const now = Math.floor(Date.now() / 1000);
-  if (payload.exp && payload.exp < now) {
-    const expired = new Date(payload.exp * 1000).toISOString().split('T')[0];
+  if (localPayload.exp && localPayload.exp < now) {
+    const expired = new Date(localPayload.exp * 1000).toISOString().split('T')[0];
     console.error(`\n  \x1b[31m✗ This key expired on ${expired}\x1b[0m`);
-    console.error('  Get a new one at \x1b[36mtrimwares.com/pro\x1b[0m\n');
+    console.error('  Renew at \x1b[36mtrimwares.com/pro\x1b[0m\n');
+    process.exit(1);
+  }
+  console.log('✓');
+
+  // Step 2: register machine with Cloudflare Worker to get activation token
+  process.stdout.write('  Activating on this machine… ');
+  const machineId = await getMachineId();
+  let activationToken = null;
+  let workerTier      = localPayload.tier;
+  let workerEmail     = localPayload.email ?? null;
+  let workerExpires   = localPayload.exp
+    ? new Date(localPayload.exp * 1000).toISOString().split('T')[0]
+    : 'never';
+
+  try {
+    const res = await fetch(`${WORKER_URL}/activate`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ key: keyStr, machineId }),
+      signal:  AbortSignal.timeout(10000),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      console.error(`\n  \x1b[31m✗ ${data.error ?? 'Activation failed'}\x1b[0m\n`);
+      process.exit(1);
+    }
+    activationToken = data.token;
+    workerTier      = data.tier      ?? workerTier;
+    workerEmail     = data.email     ?? workerEmail;
+    workerExpires   = data.expires   ?? workerExpires;
+    console.log('✓');
+  } catch (e) {
+    console.error(`\n  \x1b[31m✗ Could not reach activation server: ${e.message}\x1b[0m`);
+    console.error('  Check your internet connection and try again.\n');
     process.exit(1);
   }
 
-  const { mkdirSync, writeFileSync } = await import('fs');
-  const { join }    = await import('path');
-  const { homedir } = await import('os');
-  const configDir  = join(homedir(), '.trimwares');
-  const configPath = join(configDir, 'config.json');
-  mkdirSync(configDir, { recursive: true });
-
-  const expiresAt = payload.exp ? new Date(payload.exp * 1000).toISOString().split('T')[0] : 'never';
-  writeFileSync(configPath, JSON.stringify({
-    licenseKey:  keyStr,
-    tier:        payload.tier,
-    email:       payload.email ?? null,
-    customerId:  payload.customerId ?? null,
-    expiresAt,
-  }, null, 2));
+  // Step 3: store activation token
+  await saveConfig({
+    licenseKey:      keyStr,
+    activationToken,
+    tier:            workerTier,
+    email:           workerEmail,
+    customerId:      localPayload.customerId ?? null,
+    expiresAt:       workerExpires,
+  });
 
   console.log(`\n  \x1b[32m✓ License activated\x1b[0m`);
   console.log(`  \x1b[90m─────────────────────────────────\x1b[0m`);
-  console.log(`  Tier:    \x1b[36m${payload.tier}\x1b[0m`);
-  if (payload.email) console.log(`  Email:   ${payload.email}`);
-  console.log(`  Expires: ${expiresAt}`);
+  console.log(`  Tier:    \x1b[36m${workerTier}\x1b[0m`);
+  if (workerEmail) console.log(`  Email:   ${workerEmail}`);
+  console.log(`  Expires: ${workerExpires}`);
   console.log(`\n  Run \x1b[33mnpx trimwares serve\x1b[0m to open the dashboard.\n`);
   process.exit(0);
 }
@@ -161,6 +306,9 @@ if (command === 'clear') {
 // ─── check (CI gate) ─────────────────────────────────────────────────────────
 
 if (command === 'check') {
+  // CI gate is a Pro feature — team/professional workflows only
+  await requireProLicense('The CI gate (npx trimwares check)');
+
   const { readFileSync, existsSync } = await import('fs');
   const { resolve } = await import('path');
 
@@ -234,46 +382,328 @@ if (command === 'check') {
   process.exit(failed > 0 ? 1 : 0);
 }
 
+// ─── add ─────────────────────────────────────────────────────────────────────
+
+if (command === 'add') {
+  const { resolve: resolvePath, basename } = await import('path');
+  const { existsSync, readFileSync }       = await import('fs');
+  const targetPath = rest[0] ? resolvePath(rest[0]) : resolvePath(process.cwd());
+
+  if (!existsSync(targetPath)) {
+    console.error(`\n  \x1b[31m✗ Path not found: ${targetPath}\x1b[0m\n`);
+    process.exit(1);
+  }
+
+  const LLM_DEPS = ['openai', '@anthropic-ai/sdk', '@google/generative-ai', 'groq-sdk',
+    'langchain', '@langchain/openai', 'ollama', 'cohere-ai', 'mistralai', '@trimwares/trace'];
+  const pkgPath = resolvePath(targetPath, 'package.json');
+  const hasData = existsSync(resolvePath(targetPath, '.trimwares', 'session.jsonl'));
+  let providers = [];
+  if (existsSync(pkgPath)) {
+    try {
+      const pkg  = JSON.parse(readFileSync(pkgPath, 'utf8'));
+      const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+      providers  = LLM_DEPS.filter(d => deps[d]);
+    } catch { /* ignore */ }
+  }
+
+  const registry = await loadProjectRegistry();
+  const alreadyAdded = registry.find(p => p.path === targetPath);
+  if (alreadyAdded) {
+    console.log(`\n  \x1b[33m⚠  Already registered:\x1b[0m ${alreadyAdded.name} (${targetPath})\n`);
+    process.exit(0);
+  }
+
+  const name = basename(targetPath);
+  registry.push({ path: targetPath, name, addedAt: Date.now(), providers, hasExistingData: hasData });
+  await saveProjectRegistry(registry);
+
+  console.log(`\n  \x1b[32m✓ Project added:\x1b[0m ${name}`);
+  console.log(`  \x1b[90mPath:\x1b[0m ${targetPath}`);
+  if (providers.length > 0) console.log(`  \x1b[90mLLM providers:\x1b[0m ${providers.join(', ')}`);
+  if (hasData) console.log(`  \x1b[32m⚡ Existing session data found\x1b[0m`);
+  console.log(`\n  Start the dashboard: \x1b[33mnpx trimwares serve\x1b[0m\n`);
+  process.exit(0);
+}
+
+// ─── daemon ───────────────────────────────────────────────────────────────────
+
+if (command === 'daemon') {
+  const subcommand = rest[0] ?? 'status';
+  const { fileURLToPath } = await import('url');
+  const { join: pathJoin } = await import('path');
+  const { homedir }       = await import('os');
+  const { exec: execCmd } = await import('child_process');
+  const { existsSync: fsExists } = await import('fs');
+  const { writeFileSync: fsWrite, mkdirSync: fsMkdir } = await import('fs');
+
+  const scriptPath = fileURLToPath(import.meta.url);
+  const nodePath   = process.execPath;
+  const logDir     = pathJoin(homedir(), '.trimwares');
+  fsMkdir(logDir, { recursive: true });
+
+  const run = (cmd) => new Promise((ok, fail) =>
+    execCmd(cmd, (err, stdout, stderr) => err ? fail(err) : ok((stdout + stderr).trim()))
+  );
+
+  if (process.platform === 'darwin') {
+    const plistPath = pathJoin(homedir(), 'Library', 'LaunchAgents', 'com.trimwares.trace.plist');
+    const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.trimwares.trace</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${nodePath}</string>
+    <string>${scriptPath}</string>
+    <string>serve</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>${pathJoin(logDir, 'daemon.log')}</string>
+  <key>StandardErrorPath</key><string>${pathJoin(logDir, 'daemon-error.log')}</string>
+</dict>
+</plist>`;
+
+    if (subcommand === 'start') {
+      fsWrite(plistPath, plist, 'utf8');
+      try { await run(`launchctl unload "${plistPath}" 2>/dev/null`); } catch { /* ok */ }
+      await run(`launchctl load -w "${plistPath}"`);
+      console.log('\n  \x1b[32m✓ Daemon started\x1b[0m — Trimwares Trace runs at boot');
+      console.log(`  Dashboard: \x1b[36mhttp://localhost:7778\x1b[0m`);
+      console.log(`  Logs: ${pathJoin(logDir, 'daemon.log')}\n`);
+    } else if (subcommand === 'stop') {
+      try { await run(`launchctl unload "${plistPath}"`); console.log('\n  \x1b[32m✓ Daemon stopped\x1b[0m\n'); }
+      catch { console.error('\n  \x1b[31m✗ Daemon not running\x1b[0m\n'); }
+    } else {
+      const running = fsExists(plistPath);
+      console.log(`\n  Daemon: ${running ? '\x1b[32minstalled\x1b[0m' : '\x1b[90mnot installed\x1b[0m'}`);
+      console.log(`  Start: \x1b[33mnpx trimwares daemon start\x1b[0m\n`);
+    }
+
+  } else if (process.platform === 'win32') {
+    const taskName   = 'TrimwaresTrace';
+    const startupDir = pathJoin(process.env.APPDATA ?? pathJoin(homedir(), 'AppData', 'Roaming'),
+      'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
+    const startupCmd = pathJoin(startupDir, 'TrimwaresTrace.cmd');
+    // Escape inner quotes for schtasks /tr — cmd.exe needs \" inside the outer quotes
+    const safeNode   = nodePath.replace(/"/g, '\\"');
+    const safeScript = scriptPath.replace(/"/g, '\\"');
+    const taskCmd    = `\\"${safeNode}\\" \\"${safeScript}\\" serve`;
+
+    if (subcommand === 'start') {
+      // Try Task Scheduler first (no /ru — avoids elevation requirement).
+      // Fall back to Startup folder if schtasks is still denied.
+      let usedStartup = false;
+      try {
+        try { await run(`schtasks /delete /tn "${taskName}" /f`); } catch { /* ok */ }
+        await run(`schtasks /create /tn "${taskName}" /tr "${taskCmd}" /sc onlogon /f`);
+      } catch {
+        // Startup-folder fallback — always writable without admin
+        fsMkdir(startupDir, { recursive: true });
+        fsWrite(startupCmd, `@echo off\nstart "" "${nodePath}" "${scriptPath}" serve\n`, 'utf8');
+        usedStartup = true;
+      }
+      // Kill any stale serve already holding the port before spawning fresh
+      try { await run(`for /f "tokens=5" %a in ('netstat -ano ^| findstr :7778') do taskkill /PID %a /F`); } catch { /* ok — port was free */ }
+      await new Promise(r => setTimeout(r, 500)); // let OS release the port
+      // Launch serve in a detached background process
+      const { spawn } = await import('child_process');
+      spawn(nodePath, [scriptPath, 'serve'], {
+        detached: true, stdio: 'ignore',
+        env: { ...process.env },
+      }).unref();
+      console.log('\n  \x1b[32m✓ Daemon started\x1b[0m — Trimwares Trace runs at login');
+      if (usedStartup) console.log('  \x1b[90m(registered via Startup folder — Task Scheduler unavailable)\x1b[0m');
+      console.log(`  Dashboard: \x1b[36mhttp://localhost:7778\x1b[0m\n`);
+    } else if (subcommand === 'stop') {
+      let stopped = false;
+      try { await run(`schtasks /end /tn "${taskName}"`); stopped = true; } catch { /* ok */ }
+      // Also kill any detached node process serving on 7778
+      try { await run(`for /f "tokens=5" %a in ('netstat -ano ^| findstr :7778') do taskkill /PID %a /F`); stopped = true; } catch { /* ok */ }
+      if (stopped) console.log('\n  \x1b[32m✓ Daemon stopped\x1b[0m\n');
+      else console.error('\n  \x1b[31m✗ Could not stop daemon\x1b[0m\n');
+    } else {
+      let installed = false;
+      try {
+        const out = await run(`schtasks /query /tn "${taskName}" /fo LIST`);
+        installed = out.includes(taskName);
+      } catch { /* not in task scheduler */ }
+      if (!installed) installed = fsExists(startupCmd);
+      console.log(`\n  Daemon: ${installed ? '\x1b[32minstalled\x1b[0m' : '\x1b[90mnot installed\x1b[0m'}`);
+      // Check if serve is actually listening
+      try {
+        const net = await import('net');
+        await new Promise((ok, fail) => {
+          const s = net.createConnection(7778, '127.0.0.1');
+          s.on('connect', () => { s.destroy(); ok(); });
+          s.on('error',   () => { s.destroy(); fail(); });
+        });
+        console.log('  Server:  \x1b[32mlistening on :7778\x1b[0m');
+      } catch { console.log('  Server:  \x1b[90mnot running\x1b[0m'); }
+      console.log(`  Start:   \x1b[33mnpx trimwares daemon start\x1b[0m\n`);
+    }
+
+  } else {
+    // Linux — systemd user service
+    const serviceDir  = pathJoin(homedir(), '.config', 'systemd', 'user');
+    const servicePath = pathJoin(serviceDir, 'trimwares.service');
+    const unit = `[Unit]
+Description=Trimwares Trace Dashboard
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${nodePath} ${scriptPath} serve
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+`;
+
+    if (subcommand === 'start') {
+      fsMkdir(serviceDir, { recursive: true });
+      fsWrite(servicePath, unit, 'utf8');
+      await run('systemctl --user daemon-reload');
+      await run('systemctl --user enable trimwares');
+      await run('systemctl --user start trimwares');
+      console.log('\n  \x1b[32m✓ Daemon started\x1b[0m — Trimwares Trace runs at login');
+      console.log(`  Dashboard: \x1b[36mhttp://localhost:7778\x1b[0m`);
+      console.log(`  Status: \x1b[33msystemctl --user status trimwares\x1b[0m\n`);
+    } else if (subcommand === 'stop') {
+      try { await run('systemctl --user stop trimwares'); console.log('\n  \x1b[32m✓ Daemon stopped\x1b[0m\n'); }
+      catch { console.error('\n  \x1b[31m✗ Daemon not running\x1b[0m\n'); }
+    } else {
+      try {
+        const out = await run('systemctl --user is-active trimwares');
+        const active = out.trim() === 'active';
+        console.log(`\n  Daemon: ${active ? '\x1b[32mactive\x1b[0m' : '\x1b[90minactive\x1b[0m'}`);
+      } catch {
+        console.log('\n  Daemon: \x1b[90mnot installed\x1b[0m');
+      }
+      console.log(`  Start: \x1b[33mnpx trimwares daemon start\x1b[0m\n`);
+    }
+  }
+
+  process.exit(0);
+}
+
 // ─── serve ───────────────────────────────────────────────────────────────────
 
 if (command === 'serve') {
 
   // ── HARD GATE — nothing runs below this without a valid Pro license ─────────
-  const license = await requireProLicense();
+  const license = await requireProLicense('The dashboard');
 
   const { createServer }                          = await import('http');
   const { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } = await import('fs');
-  const { join, resolve, extname }                = await import('path');
+  const { join, resolve, extname, basename }      = await import('path');
+  const { homedir }                               = await import('os');
   const { fileURLToPath }                         = await import('url');
   const { exec }                                  = await import('child_process');
   const { buildRules, evaluateAlerts }            = await import('../dist/telemetry/AlertEngine.js').catch(() => ({ buildRules: () => [], evaluateAlerts: () => [] }));
 
-  const PORT   = 7777;
+  const portFlag = rest.indexOf('--port');
+  const PORT     = portFlag !== -1 && rest[portFlag + 1] ? parseInt(rest[portFlag + 1], 10) : 7778;
   const __dir  = fileURLToPath(new URL('.', import.meta.url));
   const UI_DIR = resolve(__dir, '../ui');
 
   // ── data helpers ─────────────────────────────────────────────────────────────
 
-  function loadSessionEntries() {
-    const sessionPath = resolve(process.cwd(), '.trimwares/session.jsonl');
-    if (!existsSync(sessionPath)) return [];
+  // ── project registry (sync wrappers for serve context) ───────────────────────
+
+  const REGISTRY_PATH = join(homedir(), '.trimwares', 'projects.json');
+
+  function readProjectRegistry() {
+    if (!existsSync(REGISTRY_PATH)) return [];
+    try { return JSON.parse(readFileSync(REGISTRY_PATH, 'utf8')); } catch { return []; }
+  }
+
+  function writeProjectRegistry(reg) {
+    mkdirSync(join(homedir(), '.trimwares'), { recursive: true });
+    writeFileSync(REGISTRY_PATH, JSON.stringify(reg, null, 2));
+  }
+
+  const LLM_DEPS = ['openai', '@anthropic-ai/sdk', '@google/generative-ai', 'groq-sdk',
+    'langchain', '@langchain/openai', 'ollama', 'cohere-ai', 'mistralai', '@trimwares/trace'];
+
+  function detectLLMProjectSync(absPath) {
+    const pkgPath = join(absPath, 'package.json');
+    const hasData = existsSync(join(absPath, '.trimwares', 'session.jsonl'));
+    if (!existsSync(pkgPath)) return { compatible: hasData, providers: [], hasExistingData: hasData, hasPackageJson: false };
     try {
-      return readFileSync(sessionPath, 'utf8')
+      const pkg  = JSON.parse(readFileSync(pkgPath, 'utf8'));
+      const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+      const found = LLM_DEPS.filter(d => deps[d]);
+      return { compatible: found.length > 0 || hasData, providers: found, hasExistingData: hasData, hasPackageJson: true };
+    } catch { return { compatible: hasData, providers: [], hasExistingData: hasData, hasPackageJson: false }; }
+  }
+
+  // ── per-path data loaders ─────────────────────────────────────────────────────
+
+  // Normalizes any entry — old or new — into a consistent shape so downstream
+  // code never needs to guard against missing attribution sub-fields.
+  function normalizeEntry(raw, projectPath) {
+    const a = raw.attribution ?? {};
+    const safe = (sub) => ({ tokens: sub?.tokens ?? 0, estimatedCost: sub?.estimatedCost ?? 0 });
+    const attr = {
+      totalCost:           a.totalCost           ?? 0,
+      totalInputTokens:    a.totalInputTokens     ?? 0,
+      totalOutputTokens:   a.totalOutputTokens    ?? 0,
+      systemPrompt:        safe(a.systemPrompt),
+      toolSchemas:         safe(a.toolSchemas),
+      ragChunks:           safe(a.ragChunks),
+      conversationHistory: safe(a.conversationHistory),
+      userQuery:           safe(a.userQuery),
+      outputTokens:        safe(a.outputTokens),
+    };
+    return {
+      ...raw,
+      _projectPath: projectPath,
+      attribution:  attr,
+      realCost:     raw.realCost    ?? attr.totalCost,
+      realSavings:  raw.realSavings ?? (raw.cached ? attr.totalCost : 0),
+    };
+  }
+
+  function loadSessionEntriesFrom(absPath) {
+    const p = join(absPath, '.trimwares', 'session.jsonl');
+    if (!existsSync(p)) return [];
+    try {
+      return readFileSync(p, 'utf8')
         .split('\n').filter(Boolean).slice(-500)
-        .flatMap(l => { try { return [JSON.parse(l)]; } catch { return []; } });
+        .flatMap(l => { try { return [normalizeEntry(JSON.parse(l), absPath)]; } catch { return []; } });
     } catch { return []; }
   }
 
-  function loadHistoryEntries() {
-    const histPath = resolve(process.cwd(), '.trimwares/history.jsonl');
-    if (!existsSync(histPath)) return [];
+  function loadHistoryEntriesFrom(absPath) {
+    const p = join(absPath, '.trimwares', 'history.jsonl');
+    if (!existsSync(p)) return [];
     const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
     try {
-      return readFileSync(histPath, 'utf8')
+      return readFileSync(p, 'utf8')
         .split('\n').filter(Boolean)
-        .flatMap(l => { try { return [JSON.parse(l)]; } catch { return []; } })
+        .flatMap(l => { try { return [normalizeEntry(JSON.parse(l), absPath)]; } catch { return []; } })
         .filter(e => e.timestamp && new Date(e.timestamp).getTime() >= cutoff);
     } catch { return []; }
+  }
+
+  // ── multi-project-aware loaders ───────────────────────────────────────────────
+
+  function loadSessionEntries(projectPath) {
+    const registry = readProjectRegistry();
+    if (projectPath && projectPath !== 'all') return loadSessionEntriesFrom(projectPath);
+    if (registry.length > 0) return registry.flatMap(p => loadSessionEntriesFrom(p.path));
+    return loadSessionEntriesFrom(process.cwd());
+  }
+
+  function loadHistoryEntries(projectPath) {
+    const registry = readProjectRegistry();
+    if (projectPath && projectPath !== 'all') return loadHistoryEntriesFrom(projectPath);
+    if (registry.length > 0) return registry.flatMap(p => loadHistoryEntriesFrom(p.path));
+    return loadHistoryEntriesFrom(process.cwd());
   }
 
   function groupHistoryByDay(entries) {
@@ -281,10 +711,15 @@ if (command === 'serve') {
     for (const e of entries) {
       const day = new Date(e.timestamp).toISOString().split('T')[0];
       if (!day) continue;
-      if (!byDay[day]) byDay[day] = { date: day, spend: 0, requests: 0, saved: 0 };
-      byDay[day].spend    += realCostOf(e);
+      if (!byDay[day]) byDay[day] = { date: day, spend: 0, requests: 0, saved: 0, cached: 0, toolCost: 0 };
+      const cost = realCostOf(e);
+      byDay[day].spend    += cost;
       byDay[day].requests += 1;
       byDay[day].saved    += realSavingsOf(e);
+      if (e.cached) byDay[day].cached += 1;
+      // Scale heuristic tool-schema cost to actual billed cost so the ratio is accurate
+      const heuristic = e.attribution?.totalCost || 1;
+      byDay[day].toolCost += (e.attribution?.toolSchemas?.estimatedCost ?? 0) * (cost / heuristic);
     }
     const days = Object.values(byDay).sort((a, b) => a.date.localeCompare(b.date));
     const spend30d    = days.reduce((s, d) => s + d.spend, 0);
@@ -297,6 +732,40 @@ if (command === 'serve') {
         avgDailySpend: days.length > 0 ? spend30d / days.length : 0,
       },
     };
+  }
+
+  // Merges live session entries for today into the history days array so that
+  // alert thresholds see current-day spend even before history.jsonl is written.
+  function mergeSessionToday(days, sessionEntries) {
+    const today = new Date().toISOString().split('T')[0];
+    const todayE = sessionEntries.filter(e => e.timestamp && new Date(e.timestamp).toISOString().split('T')[0] === today);
+    if (todayE.length === 0) return days;
+
+    let spend = 0, saved = 0, cached = 0, toolCost = 0;
+    for (const e of todayE) {
+      const cost = realCostOf(e);
+      spend    += cost;
+      saved    += realSavingsOf(e);
+      if (e.cached) cached++;
+      const h = e.attribution.totalCost || 1;
+      toolCost += (e.attribution.toolSchemas.estimatedCost * cost / h);
+    }
+
+    const idx = days.findIndex(d => d.date === today);
+    const base = idx >= 0 ? days[idx] : { date: today, spend: 0, saved: 0, requests: 0, cached: 0, toolCost: 0 };
+    const merged = {
+      date: today,
+      spend:    base.spend    + spend,
+      saved:    base.saved    + saved,
+      requests: base.requests + todayE.length,
+      cached:   base.cached   + cached,
+      toolCost: base.toolCost + toolCost,
+    };
+
+    if (idx >= 0) {
+      return [...days.slice(0, idx), merged, ...days.slice(idx + 1)];
+    }
+    return [...days, merged].sort((a, b) => a.date.localeCompare(b.date));
   }
 
   function loadLatestSimulation() {
@@ -315,7 +784,15 @@ if (command === 'serve') {
 
   function loadAlertsConfig() {
     if (!existsSync(ALERTS_CONFIG_PATH)) return {};
-    try { return JSON.parse(readFileSync(ALERTS_CONFIG_PATH, 'utf8')); } catch { return {}; }
+    try {
+      const cfg = JSON.parse(readFileSync(ALERTS_CONFIG_PATH, 'utf8'));
+      // Migrate old single maxDailySpend → spendThresholds array
+      if (cfg.maxDailySpend != null && cfg.spendThresholds == null) {
+        cfg.spendThresholds = [cfg.maxDailySpend];
+        delete cfg.maxDailySpend;
+      }
+      return cfg;
+    } catch { return {}; }
   }
 
   function saveAlertsConfig(cfg) {
@@ -325,11 +802,9 @@ if (command === 'serve') {
     } catch { /* non-fatal */ }
   }
 
-  // realCost/realSavings come from CostEngine (actual provider usage tokens).
-  // Older log entries written before this field existed fall back to the
-  // heuristic attribution.totalCost so the dashboard doesn't break on stale data.
-  function realCostOf(e)    { return e.realCost    ?? e.attribution.totalCost; }
-  function realSavingsOf(e) { return e.realSavings ?? (e.cached ? e.attribution.totalCost : 0); }
+  // Fields guaranteed by normalizeEntry — always numbers, never undefined.
+  function realCostOf(e)    { return e.realCost    ?? 0; }
+  function realSavingsOf(e) { return e.realSavings ?? 0; }
 
   function deriveWasteReport(entries) {
     if (!entries.length) return {
@@ -477,35 +952,152 @@ if (command === 'serve') {
   }
 
   function handleRequest(req, res) {
-    res.setHeader('Access-Control-Allow-Origin', 'http://localhost:7777');
+    res.setHeader('Access-Control-Allow-Origin', `http://localhost:${PORT}`);
+    if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
-    const qs      = new URL(req.url, 'http://localhost').searchParams;
-    const project = qs.get('project') || null;
-    const urlPath = req.url.split('?')[0];
+    const qs          = new URL(req.url, 'http://localhost').searchParams;
+    const project     = qs.get('project')     || null;
+    const projectPath = qs.get('projectPath') || null;
+    const urlPath     = req.url.split('?')[0];
 
-    // ── Projects list ───────────────────────────────────────────────────────────
+    // ── Projects list (registry-aware) ──────────────────────────────────────────
     if (urlPath === '/api/projects') {
-      const all = [...loadSessionEntries(), ...loadHistoryEntries()];
-      const seen = new Set();
-      for (const e of all) {
-        if (e.labels?.project) seen.add(e.labels.project);
+      const registry = readProjectRegistry();
+      if (registry.length > 0) {
+        const projects = registry.map(p => {
+          const entries  = loadSessionEntriesFrom(p.path);
+          const history  = loadHistoryEntriesFrom(p.path);
+          const allE     = [...entries, ...history];
+          const spend    = allE.reduce((s, e) => s + realCostOf(e), 0);
+          return { name: p.name, path: p.path, spend, requests: entries.length, providers: p.providers ?? [], addedAt: p.addedAt };
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ projects, mode: 'registry' }));
+      } else {
+        const all  = [...loadSessionEntriesFrom(process.cwd()), ...loadHistoryEntriesFrom(process.cwd())];
+        const seen = new Set();
+        for (const e of all) if (e.labels?.project) seen.add(e.labels.project);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ projects: [...seen].sort().map(n => ({ name: n, path: null })), mode: 'labels' }));
       }
+      return;
+    }
+
+    // ── Add project ──────────────────────────────────────────────────────────────
+    if (req.method === 'POST' && urlPath === '/api/projects/add') {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        try {
+          const { path: rawPath, name: rawName } = JSON.parse(body);
+          const abs  = resolve(rawPath);
+          const reg  = readProjectRegistry();
+          if (!reg.find(p => p.path === abs)) {
+            const det = detectLLMProjectSync(abs);
+            reg.push({ path: abs, name: rawName || basename(abs), addedAt: Date.now(), providers: det.providers, hasExistingData: det.hasExistingData });
+            writeProjectRegistry(reg);
+          }
+          const project = reg.find(p => p.path === abs);
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: true, project }));
+        } catch { res.writeHead(400); res.end('Bad request'); }
+      });
+      return;
+    }
+
+    // ── Remove project ───────────────────────────────────────────────────────────
+    if (req.method === 'POST' && urlPath === '/api/projects/remove') {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        try {
+          const { path: rawPath } = JSON.parse(body);
+          const abs = resolve(rawPath);
+          writeProjectRegistry(readProjectRegistry().filter(p => p.path !== abs));
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: true }));
+        } catch { res.writeHead(400); res.end('Bad request'); }
+      });
+      return;
+    }
+
+    // ── File browser ─────────────────────────────────────────────────────────────
+    if (urlPath === '/api/browse') {
+      const rawPath = qs.get('path');
+
+      // Special root sentinel — show drives on Windows, / on Unix
+      if (!rawPath || rawPath === '__root__') {
+        if (process.platform === 'win32') {
+          // Enumerate drive letters A–Z
+          const drives = [];
+          for (let c = 65; c <= 90; c++) {
+            const d = String.fromCharCode(c) + ':\\';
+            try { readdirSync(d); drives.push({ name: d, path: d, hasPackageJson: false, hasData: existsSync(join(d, '.trimwares', 'session.jsonl')) }); } catch { /* not mounted */ }
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ path: '__root__', parent: null, dirs: drives, isRoot: true }));
+        } else {
+          // Unix: start at home, allow going up to /
+          const abs   = homedir();
+          const items = readdirSync(abs, { withFileTypes: true });
+          const dirs  = items
+            .filter(i => i.isDirectory() && !i.name.startsWith('.') && i.name !== 'node_modules')
+            .map(i => { const full = join(abs, i.name); return { name: i.name, path: full, hasPackageJson: existsSync(join(full, 'package.json')), hasData: existsSync(join(full, '.trimwares', 'session.jsonl')) }; })
+            .sort((a, b) => a.name.localeCompare(b.name));
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ path: abs, parent: abs !== '/' ? resolve(abs, '..') : '__root__', dirs }));
+        }
+        return;
+      }
+
+      try {
+        const abs   = resolve(rawPath);
+        const items = readdirSync(abs, { withFileTypes: true });
+        const dirs  = items
+          .filter(i => i.isDirectory() && !i.name.startsWith('.') && i.name !== 'node_modules')
+          .map(i => {
+            const full = join(abs, i.name);
+            return { name: i.name, path: full, hasPackageJson: existsSync(join(full, 'package.json')), hasData: existsSync(join(full, '.trimwares', 'session.jsonl')) };
+          })
+          .sort((a, b) => a.name.localeCompare(b.name));
+        // Parent: go up one level; if we'd hit the drive root on Windows, go to __root__ instead
+        const up = resolve(abs, '..');
+        const atDriveRoot = process.platform === 'win32' && up === abs;
+        const parent = atDriveRoot ? '__root__' : (up !== abs ? up : null);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ path: abs, parent, dirs }));
+      } catch {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: 'Cannot read directory' }));
+      }
+      return;
+    }
+
+    // ── LLM project detection ─────────────────────────────────────────────────────
+    if (urlPath === '/api/detect') {
+      const detPath = qs.get('path');
+      if (!detPath) { res.writeHead(400); res.end('path required'); return; }
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ projects: [...seen].sort() }));
+      res.end(JSON.stringify(detectLLMProjectSync(resolve(detPath))));
       return;
     }
 
     if (urlPath === '/api/data') {
-      const entries     = filterByProject(loadSessionEntries(), project);
+      const entries     = filterByProject(loadSessionEntries(projectPath), project);
       const waste       = deriveWasteReport(entries);
       const sessionAgg  = aggregateSessionAttribution(entries);
       const sessionCost = aggregateSessionCost(entries);
       const sessionLog  = buildSessionLog(entries);
       const scenarios   = loadLatestSimulation();
+      // Include detection info so the frontend can show precise setup steps
+      const detectPath  = projectPath ?? process.cwd();
+      const setup       = entries.length === 0 ? detectLLMProjectSync(detectPath) : null;
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify({
         hasData:    entries.length > 0,
         entryCount: entries.length,
+        projectPath: detectPath,
+        setup,
         waste,
         attribution: { sessionAgg, sessionCost, scenarios },
         sessionLog,
@@ -514,16 +1106,44 @@ if (command === 'serve') {
     }
 
     if (urlPath === '/api/history') {
-      const entries = filterByProject(loadHistoryEntries(), project);
+      const entries = filterByProject(loadHistoryEntries(projectPath), project);
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify(groupHistoryByDay(entries)));
+      return;
+    }
+
+    // ── Models breakdown ────────────────────────────────────────────────────────
+    if (urlPath === '/api/models') {
+      const entries = filterByProject(loadSessionEntries(projectPath), project);
+      const byModel = {};
+      for (const e of entries) {
+        const key = `${e.provider ?? 'unknown'}::${e.model ?? 'unknown'}`;
+        if (!byModel[key]) byModel[key] = {
+          model: e.model ?? 'unknown', provider: e.provider ?? 'unknown',
+          requests: 0, totalCost: 0, saved: 0, cachedRequests: 0,
+          inputTokens: 0, outputTokens: 0,
+        };
+        const m = byModel[key];
+        m.requests      += 1;
+        m.totalCost     += realCostOf(e);
+        m.saved         += realSavingsOf(e);
+        m.inputTokens   += e.realInputTokens  ?? 0;
+        m.outputTokens  += e.realOutputTokens ?? 0;
+        if (e.cached) m.cachedRequests += 1;
+      }
+      const models = Object.values(byModel)
+        .map(m => ({ ...m, cacheRate: m.requests > 0 ? Math.round(m.cachedRequests / m.requests * 100) : 0 }))
+        .sort((a, b) => b.totalCost - a.totalCost);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ models }));
       return;
     }
 
     // ── License info ────────────────────────────────────────────────────────────
     if (urlPath === '/api/license') {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      const expires = license.exp ? new Date(license.exp * 1000).toISOString().split('T')[0] : null;
+      const expTs2 = license.tokenExpires ?? license.exp ?? 0;
+      const expires = expTs2 ? new Date(expTs2 * 1000).toISOString().split('T')[0] : null;
       res.end(JSON.stringify({ tier: license.tier ?? 'pro', email: license.email ?? '', expires }));
       return;
     }
@@ -553,14 +1173,29 @@ if (command === 'serve') {
       return;
     }
 
+    // ── Fire a test notification immediately ────────────────────────────────────
+    if (req.method === 'POST' && urlPath === '/api/alerts/test') {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        try {
+          const cfg = loadAlertsConfig();
+          const { title = 'Trimwares Trace', message = 'Test alert — notifications are working!' } = body ? JSON.parse(body) : {};
+          sendDesktopNotification(title, message, { sound: cfg.sound ?? false });
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: true }));
+        } catch {
+          res.writeHead(400); res.end('Bad JSON');
+        }
+      });
+      return;
+    }
+
     // ── Alerts evaluation ───────────────────────────────────────────────────────
     if (urlPath === '/api/alerts') {
       const cfg     = loadAlertsConfig();
-      const history = groupHistoryByDay(loadHistoryEntries());
-      const days    = history.days.map(d => ({
-        date: d.date, spend: d.spend, saved: d.saved, requests: d.requests,
-        cached: 0, toolCost: 0,
-      }));
+      const history = groupHistoryByDay(loadHistoryEntries(projectPath));
+      const days    = mergeSessionToday(history.days, loadSessionEntries(projectPath));
       const rules     = buildRules(cfg);
       const triggered = evaluateAlerts(days, cfg);
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -656,26 +1291,144 @@ if (command === 'serve') {
     }
   }
 
+  // ── Cross-platform desktop notification via node-notifier ────────────────────
+  // Windows → Snoretoast (bundled) — proper Action Center registration
+  // macOS   → terminal-notifier / osascript — native Notification Center
+  // Linux   → notify-send / notifu — GNOME, KDE, XFCE
+
+  let _notifier = null;
+  async function getNotifier() {
+    if (_notifier) return _notifier;
+    const mod = await import('node-notifier');
+    _notifier = mod.default ?? mod;
+    return _notifier;
+  }
+
+  function sendDesktopNotification(title, message, { sound = false } = {}) {
+    getNotifier().then(notifier => {
+      notifier.notify({
+        title,
+        message,
+        sound,
+        wait: false,
+        appID: 'Trimwares.Trace',
+        icon: _iconPath,
+      }, (err) => {
+        if (err) {
+          // Fallback for Linux environments where node-notifier may not work
+          const safe = s => s.replace(/"/g, '\\"');
+          exec(`notify-send "${safe(title)}" "${safe(message)}" 2>/dev/null`);
+        }
+      });
+    }).catch(() => { /* non-fatal */ });
+  }
+
+  // ── Alert state tracking ──────────────────────────────────────────────────────
+  // once       → notify once per crossing; re-arms when condition clears
+  // moderate   → notify, then re-notify after intervalMinutes while still active
+  // persistent → notify every poll cycle while active
+
+  const notifiedAlerts   = new Set();        // 'once' mode: ruleIds already fired this crossing
+  const lastNotifiedTime = new Map();        // 'moderate' mode: ruleId → ms timestamp of last notify
+  let alertPollTimer     = null;
+
+  function pollAlerts() {
+    try {
+      const cfg = loadAlertsConfig();
+      if (Object.keys(cfg).length === 0) return;
+      const history  = groupHistoryByDay(loadHistoryEntries());
+      const days     = mergeSessionToday(history.days, loadSessionEntries());
+      const fired    = evaluateAlerts(days, cfg);
+      const firedIds = new Set(fired.map(a => a.ruleId));
+      const now      = Date.now();
+      const useSound = cfg.sound ?? false;
+
+      for (const alert of fired) {
+        // Dynamic spend_at_X.XX ruleIds all share the 'spend_threshold' notification config
+        const notifKey   = alert.type === 'spend_threshold' ? 'spend_threshold' : alert.ruleId;
+        const notifCfg   = cfg.notifications?.[notifKey] ?? {};
+        const mode       = notifCfg.mode ?? 'once';
+        const intervalMs = (notifCfg.intervalMinutes ?? 5) * 60 * 1000;
+
+        let shouldNotify = false;
+        if (mode === 'persistent') {
+          shouldNotify = true;
+        } else if (mode === 'moderate') {
+          const last = lastNotifiedTime.get(alert.ruleId) ?? 0;
+          if (now - last >= intervalMs) { shouldNotify = true; lastNotifiedTime.set(alert.ruleId, now); }
+        } else {
+          // 'once' (default)
+          if (!notifiedAlerts.has(alert.ruleId)) { shouldNotify = true; notifiedAlerts.add(alert.ruleId); }
+        }
+
+        if (shouldNotify) {
+          sendDesktopNotification('Trimwares Trace', alert.message, { sound: useSound });
+          console.log(`\n  \x1b[33m⚠  Alert: ${alert.label}\x1b[0m`);
+          console.log(`  ${alert.message}`);
+          console.log(`  \x1b[90mView: http://localhost:${PORT}/alerts\x1b[0m\n`);
+        }
+      }
+      // Clear 'once' + 'moderate' state when the alert resolves
+      for (const id of notifiedAlerts)   { if (!firedIds.has(id)) notifiedAlerts.delete(id); }
+      for (const id of lastNotifiedTime.keys()) { if (!firedIds.has(id)) lastNotifiedTime.delete(id); }
+    } catch { /* non-fatal */ }
+  }
+
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`\n  \x1b[31m✗ Port ${PORT} is already in use\x1b[0m`);
+      console.error(`  Another process is running on that port.`);
+      console.error(`  Run on a different port: \x1b[33mnpx trimwares serve --port 7779\x1b[0m\n`);
+    } else {
+      console.error(`\n  \x1b[31m✗ Server error: ${err.message}\x1b[0m\n`);
+    }
+    process.exit(1);
+  });
+
   server.listen(PORT, '127.0.0.1', () => {
     const url = `http://localhost:${PORT}`;
-    const expires = license.exp ? new Date(license.exp * 1000).toISOString().split('T')[0] : 'n/a';
+    const expTs = license.tokenExpires ?? license.exp ?? 0;
+    const expires = expTs ? new Date(expTs * 1000).toISOString().split('T')[0] : 'n/a';
+
+    // Auto-register cwd if no projects in registry yet
+    const reg = readProjectRegistry();
+    if (reg.length === 0) {
+      const cwd = process.cwd();
+      const det = detectLLMProjectSync(cwd);
+      if (det.compatible || det.hasExistingData) {
+        reg.push({ path: cwd, name: basename(cwd), addedAt: Date.now(), providers: det.providers, hasExistingData: det.hasExistingData });
+        writeProjectRegistry(reg);
+      }
+    }
+
     console.log(`\n  \x1b[32m⚡ Trimwares Trace\x1b[0m  \x1b[90m(${license.tier} · expires ${expires})\x1b[0m`);
-    console.log(`  \x1b[90mLocal:\x1b[0m   ${url}`);
-    console.log(`  \x1b[90mData:\x1b[0m    ${resolve(process.cwd(), '.trimwares/session.jsonl')}`);
-    console.log(`  \x1b[90mPolling every 2.5s — live as your app runs. Ctrl+C to stop.\x1b[0m\n`);
+    console.log(`  \x1b[90mLocal:\x1b[0m    ${url}`);
+    if (reg.length > 0) {
+      console.log(`  \x1b[90mProjects:\x1b[0m ${reg.length} registered  \x1b[90m(npx trimwares add <path> to add more)\x1b[0m`);
+    } else {
+      console.log(`  \x1b[90mData:\x1b[0m     ${resolve(process.cwd(), '.trimwares/session.jsonl')}`);
+    }
+    console.log(`  \x1b[90mPolling every 2.5s · alerts every 30s — live as your app runs. Ctrl+C to stop.\x1b[0m\n`);
     const opener = process.platform === 'win32' ? `start ${url}`
                  : process.platform === 'darwin' ? `open ${url}`
                  : `xdg-open ${url}`;
     exec(opener);
+
+    // Start background alert polling — fires desktop notifications independently of dashboard
+    alertPollTimer = setInterval(pollAlerts, 30_000);
   });
 
-  process.on('SIGINT', () => { server.close(); process.exit(0); });
+  process.on('SIGINT', () => {
+    if (alertPollTimer) clearInterval(alertPollTimer);
+    server.close();
+    process.exit(0);
+  });
 }
 
 // ─── unknown ──────────────────────────────────────────────────────────────────
 
 else {
   console.error(`\n  Unknown command: ${command}`);
-  console.error('  Usage: npx trimwares analyze | serve | login --key KEY | clear\n');
+  console.error('  Usage: npx trimwares analyze | serve | add [path] | daemon start|stop|status | login --key KEY | clear\n');
   process.exit(1);
 }

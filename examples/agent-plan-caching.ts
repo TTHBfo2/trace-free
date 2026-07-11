@@ -8,7 +8,7 @@
  * It caches the *reasoning structure* — the plan itself.
  */
 
-import { LLMCostTrimmer, OpenAIProvider, AgentStep } from '@tthbfo2/llm-cost-trimmer';
+import { LLMCostTrimmer, OpenAIProvider, AgentStep } from '@trimwares/trace';
 import OpenAI from 'openai';
 
 const TOOLS = [

@@ -1,4 +1,7 @@
 import { createHash } from 'crypto';
+import { existsSync, readFileSync } from 'fs';
+import { join } from 'path';
+import { homedir } from 'os';
 import {
   TrimmerConfig, LLMRequest, CostReport, WasteReport,
   ProviderName, CacheType,
@@ -83,6 +86,24 @@ export class TrimwareEngine {
       pricing: config.pricing ?? {},
       labels:  config.labels  ?? {},
     };
+
+    // Pro feature soft gate: Router and Pruner require an active Pro license.
+    // Reads ~/.trimwares/config.json synchronously (small file, one-time per engine).
+    const opt = this.config.optimization as Record<string, unknown>;
+    if (opt['routeToCheapestModel'] === true || opt['pruneContext'] === true) {
+      if (!checkProLicense()) {
+        if (opt['routeToCheapestModel']) {
+          console.warn('\n  \x1b[33m⚠  [trimwares] Model Router requires a Pro license — routing disabled.\x1b[0m');
+          console.warn('  Upgrade at \x1b[36mtrimwares.com/pro\x1b[0m\n');
+          opt['routeToCheapestModel'] = false;
+        }
+        if (opt['pruneContext']) {
+          console.warn('\n  \x1b[33m⚠  [trimwares] Context Pruner requires a Pro license — pruning disabled.\x1b[0m');
+          console.warn('  Upgrade at \x1b[36mtrimwares.com/pro\x1b[0m\n');
+          opt['pruneContext'] = false;
+        }
+      }
+    }
 
     const rcf = this.config.cache.response as { ttlMs: number; maxEntries: number };
     const scf = this.config.cache.semantic as { ttlMs: number; maxEntries: number; similarityThreshold: number };
@@ -363,4 +384,13 @@ function extractContent(raw: RawSdkResult): string {
   const content = raw['content'] as Array<{ type: string; text?: string }> | undefined;
   if (Array.isArray(content)) return content.find(b => b.type === 'text')?.text ?? '';
   return '';
+}
+
+function checkProLicense(): boolean {
+  try {
+    const cfgPath = join(homedir(), '.trimwares', 'config.json');
+    if (!existsSync(cfgPath)) return false;
+    const data = JSON.parse(readFileSync(cfgPath, 'utf8')) as Record<string, unknown>;
+    return ['pro', 'team', 'enterprise'].includes(data['tier'] as string);
+  } catch { return false; }
 }
