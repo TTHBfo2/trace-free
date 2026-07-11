@@ -861,6 +861,108 @@ if (command === 'serve') {
       categories: cats, topFix, sessionRequests: entries.length };
   }
 
+  function computeOptimizationScore(waste) {
+    if (!waste || (waste.currentSpend === 0 && waste.alreadySaved === 0)) return null;
+    const recov = waste.recoverablePercent ?? 0;
+    let score = 95 - recov * 0.75;
+    if (waste.alreadySaved > 0 && waste.totalGrossSpend > 0) {
+      score += Math.min(15, (waste.alreadySaved / waste.totalGrossSpend) * 25);
+    }
+    return Math.round(Math.max(10, Math.min(100, score)));
+  }
+
+  function buildRecommendations(waste, entries) {
+    const recs = [];
+    const cats = waste.categories ?? [];
+    function monthly(cat) { return cat?.projectedMonthlySaving ?? 0; }
+
+    const sysCat  = cats.find(c => c.label === 'System prompts');
+    const toolCat = cats.find(c => c.label === 'Unused tool schemas');
+    const ragCat  = cats.find(c => c.label === 'Redundant RAG chunks');
+    const histCat = cats.find(c => c.label === 'Stale conversation history');
+
+    if (sysCat && sysCat.cost > 0 && sysCat.severity !== 'good') {
+      recs.push({
+        id: 'cache_system_prompt',
+        title: 'Cache your system prompt',
+        description: `Your system prompt is ${sysCat.percentOfSpend}% of spend and re-sent on every request. Adding Anthropic's cache_control cuts this cost by ~85%.`,
+        estimatedMonthlySavings: monthly(sysCat),
+        confidence: 96,
+        difficulty: 'easy',
+        timeToImplement: '5 min',
+        category: 'caching',
+        codeSnippet: `// Add cache_control to your system prompt message block\nconst response = await anthropic.messages.create({\n  system: [{\n    type: "text",\n    text: "You are a helpful assistant...",\n    cache_control: { type: "ephemeral" }  // ← add this line\n  }],\n  messages: [{ role: "user", content: userMessage }]\n});`,
+      });
+    }
+
+    if (toolCat && toolCat.cost > 0) {
+      recs.push({
+        id: 'cache_tool_schemas',
+        title: 'Cache tool schema definitions',
+        description: `Tool definitions are ${toolCat.percentOfSpend}% of spend — re-sent on every agent step even when unchanged. Cache the schema prefix once.`,
+        estimatedMonthlySavings: monthly(toolCat),
+        confidence: 93,
+        difficulty: 'easy',
+        timeToImplement: '5 min',
+        category: 'caching',
+        codeSnippet: `// Add cache_control to the last tool in your tools array\nconst tools = [\n  { name: "search_web",  description: "...", input_schema: { ... } },\n  { name: "run_code",    description: "...", input_schema: { ... },\n    cache_control: { type: "ephemeral" } }  // ← last tool only\n];`,
+      });
+    }
+
+    if (ragCat && ragCat.cost > 0) {
+      recs.push({
+        id: 'cache_rag_context',
+        title: 'Cache stable document context',
+        description: `Retrieved documents are ${ragCat.percentOfSpend}% of spend. If your knowledge base is stable, mark the document block cacheable to avoid re-billing it each request.`,
+        estimatedMonthlySavings: monthly(ragCat),
+        confidence: 85,
+        difficulty: 'medium',
+        timeToImplement: '20 min',
+        category: 'caching',
+        codeSnippet: `// Mark the last document block as cacheable\nconst docBlocks = retrievedDocs.map((doc, i) => ({\n  type: "text",\n  text: doc.content,\n  ...(i === retrievedDocs.length - 1\n    ? { cache_control: { type: "ephemeral" } }\n    : {}),\n}));`,
+      });
+    }
+
+    if (histCat && histCat.cost > 0) {
+      recs.push({
+        id: 'trim_conversation_history',
+        title: 'Limit conversation history window',
+        description: `Conversation history is ${histCat.percentOfSpend}% of spend. Keeping only the last 10 turns reduces context size with minimal impact on quality.`,
+        estimatedMonthlySavings: monthly(histCat),
+        confidence: 88,
+        difficulty: 'easy',
+        timeToImplement: '10 min',
+        category: 'pruning',
+        codeSnippet: `// Trim history before each API call (user+assistant = 2 entries per turn)\nconst MAX_TURNS = 10;\nconst trimmedMessages = conversationHistory.slice(-(MAX_TURNS * 2));`,
+      });
+    }
+
+    if (entries.length >= 5) {
+      const expensive = entries.filter(e =>
+        /gpt-4o(?!-mini)/i.test(e.model ?? '') ||
+        /claude-3-5-sonnet|claude-3-opus|claude-opus/i.test(e.model ?? '')
+      );
+      if (expensive.length > entries.length * 0.3) {
+        const potentialSavings = expensive.reduce((s, e) => s + realCostOf(e), 0) * 0.60 * 30;
+        if (potentialSavings > 0.01) {
+          recs.push({
+            id: 'route_to_cheaper_models',
+            title: 'Route simple tasks to smaller models',
+            description: `${expensive.length} of ${entries.length} requests use premium models. Routing straightforward queries to GPT-4o Mini or Claude Haiku could cut those costs by ~60%.`,
+            estimatedMonthlySavings: potentialSavings,
+            confidence: 72,
+            difficulty: 'medium',
+            timeToImplement: '1-2 hrs',
+            category: 'routing',
+            codeSnippet: `// Pick model based on task complexity\nfunction selectModel(task) {\n  const needsReasoning = task.isMultiStep || task.requiresAnalysis;\n  return needsReasoning ? "gpt-4o" : "gpt-4o-mini";\n}`,
+          });
+        }
+      }
+    }
+
+    return recs.sort((a, b) => b.estimatedMonthlySavings - a.estimatedMonthlySavings);
+  }
+
   function aggregateSessionAttribution(entries) {
     const agg = { systemPrompt: 0, toolSchemas: 0, ragChunks: 0, conversationHistory: 0, userQuery: 0, outputTokens: 0, total: 0 };
     for (const e of entries) {
@@ -1094,12 +1196,13 @@ if (command === 'serve') {
       const setup       = entries.length === 0 ? detectLLMProjectSync(detectPath) : null;
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify({
-        hasData:    entries.length > 0,
-        entryCount: entries.length,
-        projectPath: detectPath,
+        hasData:           entries.length > 0,
+        entryCount:        entries.length,
+        projectPath:       detectPath,
         setup,
         waste,
-        attribution: { sessionAgg, sessionCost, scenarios },
+        optimizationScore: computeOptimizationScore(waste),
+        attribution:       { sessionAgg, sessionCost, scenarios },
         sessionLog,
       }));
       return;
@@ -1136,6 +1239,18 @@ if (command === 'serve') {
         .sort((a, b) => b.totalCost - a.totalCost);
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify({ models }));
+      return;
+    }
+
+    // ── Recommendations ──────────────────────────────────────────────────────────
+    if (urlPath === '/api/recommendations') {
+      const entries      = filterByProject(loadSessionEntries(projectPath), project);
+      const waste        = deriveWasteReport(entries);
+      const recs         = buildRecommendations(waste, entries);
+      const score        = computeOptimizationScore(waste);
+      const totalSavings = recs.reduce((s, r) => s + r.estimatedMonthlySavings, 0);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ recommendations: recs, optimizationScore: score, totalPotentialSavings: totalSavings }));
       return;
     }
 
