@@ -19,6 +19,7 @@ import { ContextPruner } from '../optimization/ContextPruner.js';
 import { TokenAttributor } from '../attribution/TokenAttributor.js';
 import { WasteReporter } from '../reporting/WasteReport.js';
 import { SessionLog } from '../telemetry/SessionLog.js';
+import { ErrorLog }   from '../telemetry/ErrorLog.js';
 import { printReport } from '../cli/analyze.js';
 
 /**
@@ -40,6 +41,7 @@ export class TrimwareEngine {
   readonly pruner:         ContextPruner;
   readonly attributor:     TokenAttributor;
   readonly sessionLog:     SessionLog;
+  readonly errorLog:       ErrorLog;
   readonly wasteReporter:  WasteReporter;
 
   constructor(provider: ProviderName, config: TrimmerConfig = {}) {
@@ -119,6 +121,7 @@ export class TrimwareEngine {
     this.pruner         = new ContextPruner({ provider: provider as string });
     this.attributor     = new TokenAttributor(provider as string);
     this.sessionLog     = new SessionLog();
+    this.errorLog       = new ErrorLog();
     this.wasteReporter  = new WasteReporter();
   }
 
@@ -199,8 +202,20 @@ export class TrimwareEngine {
     const nativeCache  = cacheOpt.cacheableTokens > 0;
 
     // 7. Live call
-    const rawResponse = await callFn({ ...optimized, ...cacheOpt });
-    const latencyMs   = Date.now() - startMs;
+    let rawResponse: RawSdkResult;
+    try {
+      rawResponse = await callFn({ ...optimized, ...cacheOpt });
+    } catch (err) {
+      this.errorLog.write({
+        timestamp: Date.now(),
+        provider:  this.provider,
+        model:     resolvedModel,
+        error:     err instanceof Error ? err.message : String(err),
+        latencyMs: Date.now() - startMs,
+      });
+      throw err;
+    }
+    const latencyMs = Date.now() - startMs;
 
     // 8. Extract usage from raw response
     const usage = extractUsage(rawResponse, request, this);

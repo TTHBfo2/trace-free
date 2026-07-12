@@ -1065,20 +1065,30 @@ if (command === 'serve') {
   }
 
   function buildSessionLog(entries, limit = 50) {
-    return entries.slice(-limit).reverse().map(e => ({
-      timestamp:    e.timestamp,
-      requestId:    e.requestId,
-      provider:     e.provider,
-      model:        e.model,
-      cost:         realCostOf(e),
-      saved:        realSavingsOf(e),
-      cached:       e.cached,
-      cacheType:    e.cacheType,
-      nativeCache:  e.nativeCache,
-      latencyMs:    e.latencyMs,
-      inputTokens:  e.realInputTokens,
-      outputTokens: e.realOutputTokens,
-    }));
+    // Compute session average cost (non-cached calls only) to detect outliers.
+    const billable  = entries.filter(e => !e.cached).map(e => realCostOf(e)).filter(c => c > 0);
+    const avgCost   = billable.length >= 5 ? billable.reduce((s, c) => s + c, 0) / billable.length : 0;
+
+    return entries.slice(-limit).reverse().map(e => {
+      const cost    = realCostOf(e);
+      // Flag non-cached requests costing >3× the session average as anomalies.
+      const anomaly = avgCost > 0 && !e.cached && cost > avgCost * 3;
+      return {
+        timestamp:    e.timestamp,
+        requestId:    e.requestId,
+        provider:     e.provider,
+        model:        e.model,
+        cost,
+        saved:        realSavingsOf(e),
+        cached:       e.cached,
+        cacheType:    e.cacheType,
+        nativeCache:  e.nativeCache,
+        latencyMs:    e.latencyMs,
+        inputTokens:  e.realInputTokens,
+        outputTokens: e.realOutputTokens,
+        anomaly,
+      };
+    });
   }
 
   // ── MIME types ────────────────────────────────────────────────────────────────
@@ -1280,6 +1290,20 @@ if (command === 'serve') {
         days: merged,
         totals: { spend30d, requests30d, avgDailySpend: merged.length > 0 ? spend30d / merged.length : 0 },
       }));
+      return;
+    }
+
+    // ── Error log ────────────────────────────────────────────────────────────────
+    if (urlPath === '/api/errors') {
+      const dir      = process.env.TRIMWARES_LOG_DIR ?? '.trimwares';
+      const errPath  = resolve(process.cwd(), dir, 'errors.jsonl');
+      const errors   = existsSync(errPath)
+        ? readFileSync(errPath, 'utf8').split('\n').filter(Boolean)
+            .flatMap(l => { try { return [JSON.parse(l)]; } catch { return []; } })
+            .slice(-50).reverse()
+        : [];
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ errors, count: errors.length }));
       return;
     }
 

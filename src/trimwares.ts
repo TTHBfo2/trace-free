@@ -402,6 +402,11 @@ async function* wrapOpenAIStream(
     }
   } catch (err) {
     streamErrored = true;
+    engine.errorLog.write({
+      timestamp: Date.now(), provider: engine.provider, model,
+      error: err instanceof Error ? err.message : String(err),
+      latencyMs: Date.now() - startMs,
+    });
     throw err;
   } finally {
     // Always record cost + session entry, even if the stream errored or the
@@ -474,6 +479,11 @@ async function* wrapAnthropicStream(
     }
   } catch (err) {
     streamErrored = true;
+    engine.errorLog.write({
+      timestamp: Date.now(), provider: engine.provider, model,
+      error: err instanceof Error ? err.message : String(err),
+      latencyMs: Date.now() - startMs,
+    });
     throw err;
   } finally {
     // Always record cost + session entry, even if the stream errored or the
