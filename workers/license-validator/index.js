@@ -147,9 +147,10 @@ async function webhook(request, env) {
   const orderId   = String(event.data.id);
   const email     = attrs.user_email;
   const name      = attrs.user_name ?? email.split('@')[0];
-  const variant   = (attrs.first_order_item?.variant_name ?? '').toLowerCase();
-  const isAnnual  = variant.includes('annual') || variant.includes('year');
-  const days      = isAnnual ? 366 : 35;
+  const variant     = (attrs.first_order_item?.variant_name ?? '').toLowerCase();
+  const isAnnual    = variant.includes('annual') || variant.includes('year');
+  const isPerpetual = variant.includes('perpetual') || variant.includes('lifetime');
+  const days        = isPerpetual ? null : isAnnual ? 366 : 35;
 
   if (!email) return json({ error: 'No email in payload' }, 400);
 
@@ -158,15 +159,15 @@ async function webhook(request, env) {
   const existing  = await env.LICENSES.get(idempKey);
   if (existing)   return json({ ok: true, skipped: true, reason: 'already processed' });
 
-  // Generate license key
+  // Generate license key (perpetual has no exp claim)
   const now        = Math.floor(Date.now() / 1000);
-  const exp        = now + days * 86400;
+  const exp        = days ? now + days * 86400 : null;
   const licenseKey = await signToken(
-    { tier: 'pro', email, customerId: `ls_${orderId}`, iat: now, exp },
+    { tier: 'pro', email, customerId: `ls_${orderId}`, iat: now, ...(exp ? { exp } : {}) },
     env$(env.PRIVATE_KEY_B64),
   );
 
-  // Seed into KV
+  // Seed into KV (perpetual: expires = null so it never expires)
   const keyId = licenseKey.split('.')[0];
   await env.LICENSES.put(`license:${keyId}`, JSON.stringify({
     tier:        'pro',
@@ -182,18 +183,18 @@ async function webhook(request, env) {
   await env.LICENSES.put(idempKey, JSON.stringify({ keyId, email, processedAt: now }));
 
   // Send welcome email via Resend
-  const emailResult = await sendWelcomeEmail({ env, to: email, name, licenseKey, isAnnual });
+  const emailResult = await sendWelcomeEmail({ env, to: email, name, licenseKey, isAnnual, isPerpetual });
 
   return json({ ok: true, orderId, email, emailSent: emailResult.ok });
 }
 
 // ─── Email via Resend ─────────────────────────────────────────────────────────
 
-async function sendWelcomeEmail({ env, to, name, licenseKey, isAnnual }) {
+async function sendWelcomeEmail({ env, to, name, licenseKey, isAnnual, isPerpetual }) {
   const resendKey = (env.RESEND_API_KEY ?? '').trim();
   if (!resendKey) return { ok: false, reason: 'RESEND_API_KEY not set' };
 
-  const planLabel = isAnnual ? 'Annual' : 'Monthly';
+  const planLabel = isPerpetual ? 'Perpetual' : isAnnual ? 'Annual' : 'Monthly';
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">

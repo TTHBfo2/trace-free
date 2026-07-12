@@ -91,6 +91,7 @@ async function saveProjectRegistry(projects) {
   writeFileSync(join(dir, 'projects.json'), JSON.stringify(projects, null, 2));
 }
 
+// Returns: new token string on success, 'server_rejected' if Worker explicitly denied (4xx), null if offline/unreachable
 async function tryRefreshToken(activationToken, machineId) {
   try {
     const res = await fetch(`${WORKER_URL}/refresh`, {
@@ -99,6 +100,7 @@ async function tryRefreshToken(activationToken, machineId) {
       body:    JSON.stringify({ token: activationToken, machineId }),
       signal:  AbortSignal.timeout(8000),
     });
+    if (res.status >= 400 && res.status < 500) return 'server_rejected';
     if (!res.ok) return null;
     const data = await res.json();
     return data.token ?? null;
@@ -128,7 +130,11 @@ async function requireProLicense(feature = 'This feature') {
       if (now - exp < TOKEN_GRACE_SEC) {
         const machineId = await getMachineId();
         const newToken  = await tryRefreshToken(config.activationToken, machineId);
-        if (newToken) {
+        if (newToken === 'server_rejected') {
+          console.error('\n  \x1b[31m✗ License expired or revoked\x1b[0m');
+          console.error('  Renew at \x1b[36mtrimwares.com/pro\x1b[0m\n');
+          process.exit(1);
+        } else if (newToken) {
           await saveConfig({ ...config, activationToken: newToken });
         } else {
           console.error('\n  \x1b[33m⚠  Could not refresh license token (offline?)\x1b[0m');
@@ -138,20 +144,24 @@ async function requireProLicense(feature = 'This feature') {
         // Beyond grace — try one final refresh before blocking
         const machineIdFinal = await getMachineId();
         const finalToken     = await tryRefreshToken(config.activationToken, machineIdFinal);
-        if (finalToken) {
+        if (finalToken === 'server_rejected') {
+          console.error('\n  \x1b[31m✗ License expired or revoked\x1b[0m');
+          console.error('  Renew at \x1b[36mtrimwares.com/pro\x1b[0m\n');
+          process.exit(1);
+        } else if (finalToken) {
           await saveConfig({ ...config, activationToken: finalToken });
         } else {
-          // No network and token expired — fail open rather than lock the user out
+          // Truly offline and beyond grace — fail open to avoid locking out users with no internet
           console.error('\n  \x1b[33m⚠  License token expired and could not be refreshed (offline?)\x1b[0m');
           console.error('  Dashboard starting in limited mode. Reconnect to the internet to renew.\n');
           return payload;
         }
       }
     } else if (exp - now < 7 * 86400) {
-      // Near expiry — refresh silently in background
+      // Near expiry — refresh silently in background (only save if not rejected)
       getMachineId().then(machineId =>
         tryRefreshToken(config.activationToken, machineId).then(newToken => {
-          if (newToken) saveConfig({ ...config, activationToken: newToken });
+          if (newToken && newToken !== 'server_rejected') saveConfig({ ...config, activationToken: newToken });
         }),
       ).catch(() => {});
     }
