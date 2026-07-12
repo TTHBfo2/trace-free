@@ -1376,11 +1376,17 @@ if (command === 'serve') {
 
     // ── Alerts evaluation ───────────────────────────────────────────────────────
     if (urlPath === '/api/alerts') {
-      const cfg     = loadAlertsConfig();
-      const history = groupHistoryByDay(loadHistoryEntries(projectPath));
-      const days    = mergeSessionToday(history.days, loadSessionEntries(projectPath));
+      const cfg       = loadAlertsConfig();
+      const history   = groupHistoryByDay(loadHistoryEntries(projectPath));
+      const days      = mergeSessionToday(history.days, loadSessionEntries(projectPath));
       const rules     = buildRules(cfg);
-      const triggered = evaluateAlerts(days, cfg);
+      const state     = loadAlertState();
+      // Replace generated timestamps with persisted first-triggered times so the
+      // UI shows when the alert actually crossed the threshold, not when the page loaded.
+      const triggered = evaluateAlerts(days, cfg).map(a => ({
+        ...a,
+        timestamp: state[a.ruleId] ?? a.timestamp,
+      }));
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify({ rules, triggered, config: cfg }));
       return;
@@ -1515,6 +1521,20 @@ if (command === 'serve') {
   const lastNotifiedTime = new Map();        // 'moderate' mode: ruleId → ms timestamp of last notify
   let alertPollTimer     = null;
 
+  // Persist when each alert FIRST fired so the UI shows the real event time,
+  // not the time the dashboard last polled.
+  const ALERT_STATE_PATH = resolve(process.cwd(), '.trimwares/alert-state.json');
+  function loadAlertState() {
+    try { return JSON.parse(readFileSync(ALERT_STATE_PATH, 'utf8')); } catch { return {}; }
+  }
+  function saveAlertState(state) {
+    try {
+      mkdirSync(resolve(process.cwd(), '.trimwares'), { recursive: true });
+      writeFileSync(ALERT_STATE_PATH, JSON.stringify(state), 'utf8');
+    } catch { /* non-fatal */ }
+  }
+  let alertState = loadAlertState(); // { ruleId: firstTriggeredMs }
+
   function pollAlerts() {
     try {
       const cfg = loadAlertsConfig();
@@ -1526,7 +1546,15 @@ if (command === 'serve') {
       const now      = Date.now();
       const useSound = cfg.sound ?? false;
 
+      let stateChanged = false;
       for (const alert of fired) {
+        // Record the real event time on first crossing — persisted so dashboard
+        // shows when it happened, not when the user next opened the page.
+        if (!alertState[alert.ruleId]) {
+          alertState[alert.ruleId] = now;
+          stateChanged = true;
+        }
+
         // Dynamic spend_at_X.XX ruleIds all share the 'spend_threshold' notification config
         const notifKey   = alert.type === 'spend_threshold' ? 'spend_threshold' : alert.ruleId;
         const notifCfg   = cfg.notifications?.[notifKey] ?? {};
@@ -1551,9 +1579,13 @@ if (command === 'serve') {
           console.log(`  \x1b[90mView: http://localhost:${PORT}/alerts\x1b[0m\n`);
         }
       }
-      // Clear 'once' + 'moderate' state when the alert resolves
+      // Clear state for resolved alerts
       for (const id of notifiedAlerts)   { if (!firedIds.has(id)) notifiedAlerts.delete(id); }
       for (const id of lastNotifiedTime.keys()) { if (!firedIds.has(id)) lastNotifiedTime.delete(id); }
+      for (const id of Object.keys(alertState)) {
+        if (!firedIds.has(id)) { delete alertState[id]; stateChanged = true; }
+      }
+      if (stateChanged) saveAlertState(alertState);
     } catch { /* non-fatal */ }
   }
 
