@@ -296,10 +296,26 @@ if (command === 'login') {
 // ─── clear ───────────────────────────────────────────────────────────────────
 
 if (command === 'clear') {
-  const { unlinkSync, existsSync } = await import('fs');
-  const path = `${process.env.TRIMWARES_LOG_DIR ?? '.trimwares'}/session.jsonl`;
-  if (existsSync(path)) { unlinkSync(path); console.log('Session log cleared.'); }
-  else { console.log('No session log found.'); }
+  const { unlinkSync, existsSync, readFileSync, appendFileSync, mkdirSync } = await import('fs');
+  const dir      = process.env.TRIMWARES_LOG_DIR ?? '.trimwares';
+  const sessPath = `${dir}/session.jsonl`;
+  const histPath = `${dir}/history.jsonl`;
+  if (existsSync(sessPath)) {
+    // Flush session entries into history before clearing so long-running
+    // apps don't lose data when the log is rotated.
+    try {
+      mkdirSync(dir, { recursive: true });
+      const lines = readFileSync(sessPath, 'utf8').split('\n').filter(Boolean);
+      if (lines.length > 0) {
+        appendFileSync(histPath, lines.join('\n') + '\n', 'utf8');
+        console.log(`  Archived ${lines.length} entries to history.`);
+      }
+    } catch { /* non-fatal — still clear the session */ }
+    unlinkSync(sessPath);
+    console.log('  Session log cleared.');
+  } else {
+    console.log('  No session log found.');
+  }
   process.exit(0);
 }
 
@@ -1253,9 +1269,17 @@ if (command === 'serve') {
     }
 
     if (urlPath === '/api/history') {
-      const entries = filterByProject(loadHistoryEntries(projectPath), project);
+      const histEntries    = filterByProject(loadHistoryEntries(projectPath), project);
+      const sessionEntries = filterByProject(loadSessionEntries(projectPath), project);
+      const { days }       = groupHistoryByDay(histEntries);
+      const merged         = mergeSessionToday(days, sessionEntries);
+      const spend30d       = merged.reduce((s, d) => s + d.spend, 0);
+      const requests30d    = merged.reduce((s, d) => s + d.requests, 0);
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify(groupHistoryByDay(entries)));
+      res.end(JSON.stringify({
+        days: merged,
+        totals: { spend30d, requests30d, avgDailySpend: merged.length > 0 ? spend30d / merged.length : 0 },
+      }));
       return;
     }
 
