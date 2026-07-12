@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.1.0] — Unreleased
+## [1.5.0] — 2026-07-12
 
 ### Added
 - Initial package structure
