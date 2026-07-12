@@ -1,0 +1,19 @@
+name               = "trace-license-validator"
+main               = "index.js"
+compatibility_date = "2024-01-01"
+
+# ─── Custom domain ───────────────────────────────────────────────────────────
+[[routes]]
+pattern   = "license.trimwares.com/*"
+zone_name = "trimwares.com"
+
+# ─── KV namespace ────────────────────────────────────────────────────────────
+[[kv_namespaces]]
+binding = "LICENSES"
+id      = "3224cedb52494709b352c84e5c49a84a"
+
+# ─── Secrets (never in this file) ────────────────────────────────────────────
+# wrangler secret put PRIVATE_KEY_B64
+# wrangler secret put ADMIN_SECRET
+# wrangler secret put LEMON_SQUEEZY_WEBHOOK_SECRET
+# wrangler secret put RESEND_API_KEY
