@@ -26,7 +26,7 @@
     "LICENSE"
   ],
   "bin": {
-    "trimwares": "./bin/trimwares.js"
+    "trimwares": "bin/trimwares.js"
   },
   "scripts": {
     "build": "tsc && rollup -c",
@@ -71,7 +71,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/TTHBfo2/LLM-cost-trimmer"
+    "url": "git+https://github.com/TTHBfo2/LLM-cost-trimmer.git"
   },
   "bugs": {
     "url": "https://github.com/TTHBfo2/LLM-cost-trimmer/issues"
