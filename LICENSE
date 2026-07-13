@@ -1,3 +1,36 @@
+TRIMWARES TRACE — DUAL-LICENSE NOTICE
+======================================
+
+The contents of this repository are licensed under two distinct terms:
+
+1. OPEN-SOURCE SDK (Apache 2.0)
+   The following files and directories are licensed under the Apache License,
+   Version 2.0 (see full text below):
+
+     src/       — SDK source code
+     bin/       — CLI entry point
+     examples/  — usage examples
+
+   You may use, copy, modify, and distribute these files freely, including in
+   commercial applications, subject to the Apache 2.0 terms below.
+
+2. PROPRIETARY — ALL RIGHTS RESERVED
+   The following files and directories are proprietary and are NOT covered by
+   the Apache 2.0 license:
+
+     ui/                              — pre-built Pro dashboard (compiled)
+     workers/license-validator/       — license validation system
+
+   You may NOT copy, redistribute, modify, reverse-engineer, or use these
+   files to build a competing product without explicit written permission from
+   the copyright holder. They are distributed solely to enable the Pro
+   dashboard to run locally on a licensed machine.
+
+Copyright 2026 TTHBfo2 (Trimwares). All rights reserved for proprietary
+components listed above.
+
+------------------------------------------------------------------------------
+
 Apache License
 Version 2.0, January 2004
 http://www.apache.org/licenses/
@@ -68,7 +101,7 @@ the Work.
 9. Accepting Warranty or Additional Liability. You may offer warranty or
 liability obligations consistent with this License on your own behalf.
 
-Copyright 2025 TTHBfo2
+Copyright 2026 TTHBfo2
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
