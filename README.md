@@ -2,7 +2,9 @@
 
 **See exactly where your AI money goes.**
 
-Local-first AI cost observability and optimization for LLM applications. Trimwares Trace shows you where every token is being spent — system prompts, tool schemas, RAG chunks, conversation history, user queries — and applies local optimizations to reduce unnecessary spend. No usage data leaves your machine by default.
+Local-first AI cost observability and optimization for LLM applications. Trimwares Trace shows you where every token is being spent — system prompts, tool schemas, RAG chunks, conversation history, user queries — and applies local optimizations to reduce unnecessary spend. No usage data ever leaves your machine.
+
+→ **[trimwares.com/trace](https://trimwares.com/trace)** — Pro: live dashboard, 30-day history, spend alerts, CI gate
 
 ```
   ⚡ Trimwares Trace — Cost Report
@@ -18,7 +20,7 @@ Local-first AI cost observability and optimization for LLM applications. Trimwar
 
   Top action: cache system prompt prefix → save ~$0.85/mo
   ────────────────────────────────────────────────────────────
-  trace.trimwares.com for 30-day history, team analytics and more.
+  trimwares.com/trace — Pro: live dashboard, 30-day history, alerts
 ```
 
 ---
@@ -63,10 +65,10 @@ That's it. The package writes a local metadata log (`.trimwares/session.jsonl`) 
 | Command | What it does |
 |---|---|
 | `npx trimwares analyze` | Terminal cost report — attribution breakdown + top savings action |
-| `npx trimwares serve` | **Pro** — opens local dashboard at localhost:7777, live polling |
+| `npx trimwares serve` | **Pro** — opens local dashboard at localhost:7778, live polling |
 | `npx trimwares login --key KEY` | Activate a Pro license key |
 | `npx trimwares clear` | Clear current session log |
-| `npx trimwares check` | CI gate — fails if spend/cache/tool% exceed configured thresholds |
+| `npx trimwares check` | **Pro** — CI gate — fails if spend/cache/tool% exceed configured thresholds |
 
 ---
 
@@ -80,17 +82,17 @@ That's it. The package writes a local metadata log (`.trimwares/session.jsonl`) 
 | `npx trimwares serve` — local dashboard | — | ✓ |
 | 30-day history + spend chart | — | ✓ |
 | Model breakdown + cache rates | — | ✓ |
-| Alert rules + export (JSON/CSV/Markdown) | — | ✓ |
-| License required | None | $19/mo · [trimwares.com/pro](https://trimwares.com/pro) |
+| Alert rules + export (JSON/CSV) | — | ✓ |
+| License required | None | $19/mo · [trimwares.com/trace](https://trimwares.com/trace) |
 | Data leaves your machine | Never | Never |
 
-Pro license is verified **offline** using an Ed25519 signature — no server round-trip, no account required to use the dashboard after activation.
+After activation, the license is verified **locally** using an Ed25519 signature — no server round-trip required on subsequent runs.
 
 ---
 
 ## Getting started with Pro
 
-1. **Purchase** at [trimwares.com/pro](https://trimwares.com/pro) — $19/month
+1. **Purchase** at [trimwares.com/trace](https://trimwares.com/trace) — $19/month
 2. **Check your email** — your license key arrives instantly after checkout
 3. **Activate** in your project directory:
    ```bash
@@ -100,7 +102,7 @@ Pro license is verified **offline** using an Ed25519 signature — no server rou
    ```bash
    npx trimwares serve
    ```
-   Dashboard opens at [localhost:7777](http://localhost:7777) — 30-day history, model breakdown, alerts, and export.
+   Dashboard opens at [localhost:7778](http://localhost:7778) — 30-day history, model breakdown, alerts, and export.
 
 ---
 
