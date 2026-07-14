@@ -71,7 +71,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TTHBfo2/LLM-cost-trimmer.git"
+    "url": "git+https://github.com/TTHBfo2/trimwares-trace.git"
   },
   "bugs": {
     "url": "https://github.com/TTHBfo2/LLM-cost-trimmer/issues"
