@@ -493,7 +493,7 @@ async function* wrapAnthropicStream(
 
     // Provider-reported totals (0 = stream errored before usage events arrived)
     const providerInput = inputTokens + cacheWriteTokens;
-    let   effectiveInput = providerInput > 0 ? providerInput
+    const effectiveInput = providerInput > 0 ? providerInput
       : engine.attributor.attribute(request, 0, pricing).totalInputTokens;
     if (outputTokens === 0) outputTokens = Math.ceil(fullContent.length / 4);
 

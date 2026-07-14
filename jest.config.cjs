@@ -27,5 +27,8 @@ module.exports = {
   restoreMocks: true,
   testTimeout: 10000,
   verbose: true,
+  // forceExit is required: @xenova/transformers loads an ONNX WASM runtime
+  // that keeps a worker thread alive after SemanticCache tests complete.
+  // The runtime has no public shutdown API, so Jest cannot exit on its own.
   forceExit: true
 };

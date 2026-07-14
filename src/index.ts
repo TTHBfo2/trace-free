@@ -196,7 +196,9 @@ export class LLMCostTrimmer {
 
     // 7. Store in caches
     this.responseCache.set(request, response);
-    void this.semanticCache.set(request, response);
+    if (this.config.cache.semantic?.enabled) {
+      void this.semanticCache.set(request, response);
+    }
 
     // 8. Record cost
     const entry = this.costEngine.record({ requestId, provider: resolvedProvider, model: raw.model, inputTokens: raw.inputTokens, outputTokens: raw.outputTokens, cached: false, cacheType: 'none', latencyMs, request, savings: 0, nativeCachedTokens });

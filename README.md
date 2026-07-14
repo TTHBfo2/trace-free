@@ -222,7 +222,7 @@ Zero-config by default. All optimizations are on with conservative settings.
 ```ts
 const openai = trimwares.openai(new OpenAI(), {
   cache: {
-    response:  { ttlMs: 24 * 60 * 60 * 1000 },   // default: 24h TTL; lower for volatile prompts
+    response:  { ttlMs: 5 * 60 * 1000 },   // default: 5 min TTL; raise for stable prompts
     // Structural similarity cache (beta) — character trigram matching, NOT embedding-based.
     // Disabled by default after stress testing showed false positives on same-structure
     // questions (e.g. "capital of France?" matching "capital of Germany?").

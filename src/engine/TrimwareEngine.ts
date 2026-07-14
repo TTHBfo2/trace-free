@@ -226,7 +226,9 @@ export class TrimwareEngine {
     if (!isStreaming) {
       const cacheEntry = buildCacheEntry(rawResponse, resolvedModel, this.provider, requestId, latencyMs, cost, usage);
       this.responseCache.set(request, cacheEntry as unknown as import('../types/index.js').LLMResponse);
-      await this.semanticCache.set(request, cacheEntry as unknown as import('../types/index.js').LLMResponse);
+      if (this.config.cache.semantic?.enabled) {
+        await this.semanticCache.set(request, cacheEntry as unknown as import('../types/index.js').LLMResponse);
+      }
     }
 
     // 10. Record cost + attribution

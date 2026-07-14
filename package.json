@@ -1,6 +1,6 @@
 {
   "name": "@trimwares/trace",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "type": "module",
   "description": "LLM cost observability CLI and SDK. Token attribution by category, local dashboard, spend alerts, CI gate. Works with OpenAI, Anthropic, Groq, Gemini, Ollama. No prompts leave your machine.",
   "main": "dist/index.cjs",
@@ -91,6 +91,7 @@
     "rollup": "^4.54.0",
     "ts-jest": "^29.1.1",
     "tslib": "^2.8.1",
+    "tsx": "^4.23.1",
     "typescript": "^5.9.3"
   },
   "peerDependencies": {
