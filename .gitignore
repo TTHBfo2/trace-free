@@ -15,3 +15,8 @@ tests/blackbox/package-lock.json
 
 workers/**/.credentials
 workers/**/.dev.vars
+workers/**/.wrangler/
+
+.npm-cache/
+.claude/
+simulation-results/

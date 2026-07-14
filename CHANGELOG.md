@@ -6,7 +6,7 @@
 - Initial package structure
 - `LLMCostTrimmer` main class — zero-config wrapper around any LLM provider
 - `ResponseCache` — exact match caching with LRU eviction and TTL
-- `SemanticCache` — local trigram TF-IDF cosine similarity cache (no extra AI calls)
+- `SemanticCache` — local all-MiniLM-L6-v2 embeddings via @xenova/transformers (ONNX WASM, ~23MB, downloaded once); disabled by default; no extra AI calls
 - `AgentPlanCache` — novel: caches agent execution plans, not just outputs
 - `CostEngine` — per-provider/model cost tracking with pricing table for OpenAI, Anthropic, Gemini, Groq
 - `TokenCounter` — deterministic token approximation, zero dependencies

@@ -223,11 +223,10 @@ Zero-config by default. All optimizations are on with conservative settings.
 const openai = trimwares.openai(new OpenAI(), {
   cache: {
     response:  { ttlMs: 5 * 60 * 1000 },   // default: 5 min TTL; raise for stable prompts
-    // Structural similarity cache (beta) — character trigram matching, NOT embedding-based.
-    // Disabled by default after stress testing showed false positives on same-structure
-    // questions (e.g. "capital of France?" matching "capital of Germany?").
-    // Enable only for near-identical copy-paste repetitions with high thresholds.
-    // True semantic caching (all-MiniLM-L6-v2 local embeddings) is planned for v0.2.
+    // Semantic cache — uses all-MiniLM-L6-v2 local embeddings (@xenova/transformers, ~23MB,
+    // downloaded once). Disabled by default: stress testing showed false positives on
+    // same-structure questions (e.g. "capital of France?" matching "capital of Germany?").
+    // Enable only for workloads with near-identical repeated queries (support bots, FAQ).
     semantic:  { enabled: false, similarityThreshold: 0.97 },
     plan:      { enabled: false },                 // disable agent plan cache
   },
