@@ -4,7 +4,7 @@
 
 Local-first AI cost observability and optimization for LLM applications. Trimwares Trace shows you where every token is being spent — system prompts, tool schemas, RAG chunks, conversation history, user queries — and applies local optimizations to reduce unnecessary spend. No usage data ever leaves your machine.
 
-→ **[trimwares.com/trace](https://trimwares.com/trace)** — Pro: live dashboard, 30-day history, spend alerts, CI gate
+→ **[trimwares.com/trace](https://trimwares.com/trace)** — Developer: full dashboard + unlimited history · Team: CI gate + cloud sync
 
 ```
   ⚡ Trimwares Trace — Cost Report
@@ -20,7 +20,7 @@ Local-first AI cost observability and optimization for LLM applications. Trimwar
 
   Top action: cache system prompt prefix → save ~$0.85/mo
   ────────────────────────────────────────────────────────────
-  trimwares.com/trace — Pro: live dashboard, 30-day history, alerts
+  trimwares.com/trace — Developer: full dashboard · Team: CI gate + cloud sync
 ```
 
 ---
@@ -65,34 +65,38 @@ That's it. The package writes a local metadata log (`.trimwares/session.jsonl`) 
 | Command | What it does |
 |---|---|
 | `npx trimwares analyze` | Terminal cost report — attribution breakdown + top savings action |
-| `npx trimwares serve` | **Pro** — opens local dashboard at localhost:7778, live polling |
-| `npx trimwares login --key KEY` | Activate a Pro license key |
+| `npx trimwares serve` | **Developer** — opens local dashboard at localhost:7778, live polling |
+| `npx trimwares login --key KEY` | Activate a Developer or Team license key |
 | `npx trimwares clear` | Clear current session log |
-| `npx trimwares check` | **Pro** — CI gate — fails if spend/cache/tool% exceed configured thresholds |
+| `npx trimwares check` | **Team** — CI gate — fails if spend/cache/tool% exceed configured thresholds |
 
 ---
 
-## Free vs Pro
+## Free vs Developer vs Team
 
-|  | Free | Pro |
-|---|---|---|
-| All SDK optimizations | ✓ | ✓ |
-| `npx trimwares analyze` — terminal report | ✓ | ✓ |
-| Session log (`.trimwares/session.jsonl`) | ✓ | ✓ |
-| `npx trimwares serve` — local dashboard | — | ✓ |
-| 30-day history + spend chart | — | ✓ |
-| Model breakdown + cache rates | — | ✓ |
-| Alert rules + export (JSON/CSV) | — | ✓ |
-| License required | None | $19/mo · [trimwares.com/trace](https://trimwares.com/trace) |
-| Data leaves your machine | Never | Never |
+|  | Free | Developer | Team |
+|---|---|---|---|
+| All SDK optimizations | ✓ | ✓ | ✓ |
+| `npx trimwares analyze` — terminal report | ✓ | ✓ | ✓ |
+| Attribution breakdown + recommendations | ✓ | ✓ | ✓ |
+| Session log (`.trimwares/session.jsonl`) | ✓ | ✓ | ✓ |
+| 7-day local dashboard | ✓ | ✓ | ✓ |
+| Full dashboard — unlimited local history | — | ✓ | ✓ |
+| Spend alerts + anomaly detection | — | ✓ | ✓ |
+| Trends + export (JSON/CSV) | — | ✓ | ✓ |
+| CI gate (`npx trimwares check`) | — | — | ✓ |
+| Cloud sync + shared dashboards | — | — | ✓ |
+| Slack / email budget alerts | — | — | ✓ |
+| License required | None | $79 lifetime · [trimwares.com/trace](https://trimwares.com/trace) | $20/user/mo |
+| Data leaves your machine | Never | Never | Only sync data |
 
 After activation, the license is verified **locally** using an Ed25519 signature — no server round-trip required on subsequent runs.
 
 ---
 
-## Getting started with Pro
+## Getting started with Developer
 
-1. **Purchase** at [trimwares.com/trace](https://trimwares.com/trace) — $19/month (checkout via Lemon Squeezy)
+1. **Purchase** at [trimwares.com/trace](https://trimwares.com/trace) — $79 lifetime, early adopter price (checkout via Lemon Squeezy)
 2. **Check your email** — your license key arrives instantly after checkout
 3. **Activate** in your project directory:
    ```bash
@@ -102,7 +106,9 @@ After activation, the license is verified **locally** using an Ed25519 signature
    ```bash
    npx trimwares serve
    ```
-   Dashboard opens at [localhost:7778](http://localhost:7778) — 30-day history, model breakdown, alerts, and export.
+   Dashboard opens at [localhost:7778](http://localhost:7778) — full dashboard, unlimited local history, alerts, and export.
+
+> **Lifetime means lifetime.** You keep your version forever. The first year of updates is included — after that, new major releases are available for a small upgrade fee (~$49). Keep what you have, or grab the latest. Your choice, no pressure.
 
 ---
 
