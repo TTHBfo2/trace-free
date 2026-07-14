@@ -2,7 +2,7 @@
   "name": "@trimwares/trace",
   "version": "1.5.0",
   "type": "module",
-  "description": "Trimwares Trace — token attribution and cost tracking for LLM applications. See exactly where your AI money goes: system prompts, tool schemas, RAG chunks, history, user queries. No prompt content stored. No extra AI calls.",
+  "description": "LLM cost observability CLI and SDK. Token attribution by category, local dashboard, spend alerts, CI gate. Works with OpenAI, Anthropic, Groq, Gemini, Ollama. No prompts leave your machine.",
   "main": "dist/index.cjs",
   "module": "dist/index.esm.js",
   "types": "dist/index.d.ts",
