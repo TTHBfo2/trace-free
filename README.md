@@ -92,7 +92,7 @@ After activation, the license is verified **locally** using an Ed25519 signature
 
 ## Getting started with Pro
 
-1. **Purchase** at [trimwares.com/trace](https://trimwares.com/trace) — $19/month
+1. **Purchase** at [trimwares.com/trace](https://trimwares.com/trace) — $19/month (checkout via Lemon Squeezy)
 2. **Check your email** — your license key arrives instantly after checkout
 3. **Activate** in your project directory:
    ```bash
