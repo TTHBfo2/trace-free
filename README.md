@@ -108,7 +108,7 @@ After activation, the license is verified **locally** using an Ed25519 signature
    ```
    Dashboard opens at [localhost:7778](http://localhost:7778) — full dashboard, unlimited local history, alerts, and export.
 
-> **Lifetime means lifetime.** You keep your version forever. The first year of updates is included — after that, new major releases are available for a small upgrade fee (~$49). Keep what you have, or grab the latest. Your choice, no pressure.
+> **Lifetime means lifetime.** You keep your version forever. The first year of updates is included — after that, new major releases are available for a small upgrade fee (pricing to be announced). Keep what you have, or grab the latest. Your choice, no pressure.
 
 ---
 
