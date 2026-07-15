@@ -194,11 +194,11 @@ async function sendWelcomeEmail({ env, to, name, licenseKey, isAnnual, isPerpetu
   const resendKey = (env.RESEND_API_KEY ?? '').trim();
   if (!resendKey) return { ok: false, reason: 'RESEND_API_KEY not set' };
 
-  const planLabel = isPerpetual ? 'Perpetual' : isAnnual ? 'Annual' : 'Monthly';
+  const planLabel = isPerpetual ? 'Developer' : isAnnual ? 'Annual' : 'Monthly';
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Your Trace Pro License</title></head>
+<title>Your Trimwares Trace License</title></head>
 <body style="margin:0;padding:0;background:#0a0a0a;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#e5e5e5">
   <table width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;margin:40px auto">
     <tr><td style="padding:0 24px">
@@ -216,7 +216,7 @@ async function sendWelcomeEmail({ env, to, name, licenseKey, isAnnual, isPerpetu
       <!-- Body -->
       <p style="font-size:15px;color:#888;margin:0 0 8px">Hi ${name},</p>
       <h1 style="font-size:24px;font-weight:600;color:#fff;margin:0 0 8px;letter-spacing:-0.5px">
-        Your Trace Pro license is ready
+        Your Trimwares Trace license is ready
       </h1>
       <p style="font-size:14px;color:#666;margin:0 0 32px">${planLabel} plan — activate in under 2 minutes.</p>
 
@@ -266,7 +266,7 @@ async function sendWelcomeEmail({ env, to, name, licenseKey, isAnnual, isPerpetu
       body: JSON.stringify({
         from:    FROM_EMAIL,
         to:      [to],
-        subject: `Your Trace Pro License Key (${planLabel})`,
+        subject: `Your Trimwares Trace License Key — ${planLabel}`,
         html,
       }),
     });
