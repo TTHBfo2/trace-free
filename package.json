@@ -2,7 +2,7 @@
   "name": "@trimwares/trace",
   "version": "1.5.3",
   "type": "module",
-  "description": "LLM cost observability CLI and SDK. Token attribution by category, local dashboard, spend alerts, CI gate. Works with OpenAI, Anthropic, Groq, Gemini, Ollama. No prompts leave your machine.",
+  "description": "LLM cost observability CLI and SDK. Token attribution by category, 7-day local dashboard, optimization recommendations. Works with OpenAI, Anthropic, Groq, Gemini, Ollama. No prompts leave your machine.",
   "main": "dist/index.cjs",
   "module": "dist/index.esm.js",
   "types": "dist/index.d.ts",
@@ -74,7 +74,7 @@
     "url": "git+https://github.com/TTHBfo2/trimwares-trace.git"
   },
   "bugs": {
-    "url": "https://github.com/TTHBfo2/LLM-cost-trimmer/issues"
+    "url": "https://github.com/TTHBfo2/trimwares-trace/issues"
   },
   "homepage": "https://trace.trimwares.com",
   "devDependencies": {
@@ -111,7 +111,6 @@
   },
   "dependencies": {
     "@xenova/transformers": "^2.17.2",
-    "node-notifier": "^10.0.1",
     "tiktoken": "^1.0.22"
   }
 }
