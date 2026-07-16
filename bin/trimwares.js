@@ -132,7 +132,7 @@ async function requireProLicense(feature = 'This feature') {
         const newToken  = await tryRefreshToken(config.activationToken, machineId);
         if (newToken === 'server_rejected') {
           console.error('\n  \x1b[31m✗ License expired or revoked\x1b[0m');
-          console.error('  Renew at \x1b[36mtrimwares.com/pro\x1b[0m\n');
+          console.error('  Renew at \x1b[36mtrimwares.com/trace\x1b[0m\n');
           process.exit(1);
         } else if (newToken) {
           await saveConfig({ ...config, activationToken: newToken });
@@ -146,7 +146,7 @@ async function requireProLicense(feature = 'This feature') {
         const finalToken     = await tryRefreshToken(config.activationToken, machineIdFinal);
         if (finalToken === 'server_rejected') {
           console.error('\n  \x1b[31m✗ License expired or revoked\x1b[0m');
-          console.error('  Renew at \x1b[36mtrimwares.com/pro\x1b[0m\n');
+          console.error('  Renew at \x1b[36mtrimwares.com/trace\x1b[0m\n');
           process.exit(1);
         } else if (finalToken) {
           await saveConfig({ ...config, activationToken: finalToken });
@@ -166,10 +166,10 @@ async function requireProLicense(feature = 'This feature') {
       ).catch(() => {});
     }
 
-    const validTiers = ['pro', 'team', 'enterprise'];
+    const validTiers = ['developer', 'team', 'enterprise'];
     if (!validTiers.includes(payload.tier)) {
       console.error('\n  \x1b[31m✗ This license does not include the dashboard\x1b[0m');
-      console.error('  Upgrade at \x1b[36mtrimwares.com/pro\x1b[0m\n');
+      console.error('  Upgrade at \x1b[36mtrimwares.com/trace\x1b[0m\n');
       process.exit(1);
     }
 
@@ -189,13 +189,29 @@ async function requireProLicense(feature = 'This feature') {
     }
   }
 
-  console.error('\n  \x1b[31m✗ Pro license required\x1b[0m');
+  console.error('\n  \x1b[31m✗ Developer license required\x1b[0m');
   console.error('  \x1b[90m──────────────────────────────────────────\x1b[0m');
-  console.error(`  ${feature} is a Pro feature.`);
-  console.error('  Get a license at \x1b[36mtrimwares.com/pro\x1b[0m');
+  console.error(`  ${feature} is a Developer feature.`);
+  console.error('  Get a license at \x1b[36mtrimwares.com/trace\x1b[0m');
   console.error('  Then activate it:\n');
   console.error('    \x1b[33mnpx trimwares login --key YOUR_LICENSE_KEY\x1b[0m\n');
   process.exit(1);
+}
+
+// Returns { tier: 'developer'|'team'|'enterprise'|'free' } — never exits
+async function checkLicenseStatus() {
+  try {
+    const config = await loadConfig();
+    if (!config?.activationToken) return { tier: 'free' };
+    const payload = await verifySignedToken(config.activationToken);
+    if (!payload) return { tier: 'free' };
+    const now = Math.floor(Date.now() / 1000);
+    const exp = payload.tokenExpires ?? payload.exp ?? 0;
+    const valid = exp === 0 || exp > now - TOKEN_GRACE_SEC;
+    const validTiers = ['developer', 'team', 'enterprise'];
+    if (valid && validTiers.includes(payload.tier)) return payload;
+  } catch { /* ignore */ }
+  return { tier: 'free' };
 }
 
 // ─── analyze ─────────────────────────────────────────────────────────────────
@@ -204,7 +220,7 @@ if (command === 'analyze') {
   const log     = new SessionLog();
   const entries = log.readAll();
 
-  // Silently check Pro status — free users see attribution data, Pro sees recommendations
+  // Silently check Developer status — free users see attribution data, Developer sees recommendations
   let isPro = false;
   try {
     const cfg = await loadConfig();
@@ -213,7 +229,7 @@ if (command === 'analyze') {
       if (payload) {
         const now = Math.floor(Date.now() / 1000);
         const exp = payload.tokenExpires ?? payload.exp ?? 0;
-        const validTiers = ['pro', 'team', 'enterprise'];
+        const validTiers = ['developer', 'team', 'enterprise'];
         isPro = validTiers.includes(payload.tier) && (exp === 0 || exp > now - TOKEN_GRACE_SEC);
       }
     }
@@ -246,7 +262,7 @@ if (command === 'login') {
   if (localPayload.exp && localPayload.exp < now) {
     const expired = new Date(localPayload.exp * 1000).toISOString().split('T')[0];
     console.error(`\n  \x1b[31m✗ This key expired on ${expired}\x1b[0m`);
-    console.error('  Renew at \x1b[36mtrimwares.com/pro\x1b[0m\n');
+    console.error('  Renew at \x1b[36mtrimwares.com/trace\x1b[0m\n');
     process.exit(1);
   }
   console.log('✓');
@@ -664,8 +680,22 @@ WantedBy=default.target
 
 if (command === 'serve') {
 
-  // ── HARD GATE — nothing runs below this without a valid Pro license ─────────
-  const license = await requireProLicense('The dashboard');
+  // ── Soft license check — free gets 7-day dashboard, Developer+ gets full ──────
+  const license = await checkLicenseStatus();
+  const isDeveloper = ['developer', 'team', 'enterprise'].includes(license.tier);
+
+  // Single enforcement point for the free-tier time window.
+  // Recomputed from Date.now() on every call so the window rolls correctly regardless of server uptime.
+  // All data endpoints MUST go through this — adding a new endpoint that bypasses it is the only way to break the limit.
+  const FREE_TIER_WINDOW_DAYS = 7;
+  const applyFreeTierFilter = (entries) => {
+    if (isDeveloper) return entries;
+    const cutoff = Date.now() - FREE_TIER_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+    return entries.filter(e => {
+      const ts = typeof e.timestamp === 'number' ? e.timestamp : new Date(e.timestamp).getTime();
+      return Number.isFinite(ts) && ts >= cutoff;
+    });
+  };
 
   const { createServer }                          = await import('http');
   const { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } = await import('fs');
@@ -673,8 +703,6 @@ if (command === 'serve') {
   const { homedir }                               = await import('os');
   const { fileURLToPath }                         = await import('url');
   const { exec }                                  = await import('child_process');
-  const { buildRules, evaluateAlerts }            = await import('../dist/telemetry/AlertEngine.js').catch(() => ({ buildRules: () => [], evaluateAlerts: () => [] }));
-
   const portFlag = rest.indexOf('--port');
   const PORT     = portFlag !== -1 && rest[portFlag + 1] ? parseInt(rest[portFlag + 1], 10) : 7778;
   const __dir  = fileURLToPath(new URL('.', import.meta.url));
@@ -769,75 +797,6 @@ if (command === 'serve') {
     return loadSessionEntriesFrom(process.cwd());
   }
 
-  function loadHistoryEntries(projectPath) {
-    const registry = readProjectRegistry();
-    if (projectPath && projectPath !== 'all') return loadHistoryEntriesFrom(projectPath);
-    if (registry.length > 0) return registry.flatMap(p => loadHistoryEntriesFrom(p.path));
-    return loadHistoryEntriesFrom(process.cwd());
-  }
-
-  function groupHistoryByDay(entries) {
-    const byDay = {};
-    for (const e of entries) {
-      const day = new Date(e.timestamp).toISOString().split('T')[0];
-      if (!day) continue;
-      if (!byDay[day]) byDay[day] = { date: day, spend: 0, requests: 0, saved: 0, cached: 0, toolCost: 0 };
-      const cost = realCostOf(e);
-      byDay[day].spend    += cost;
-      byDay[day].requests += 1;
-      byDay[day].saved    += realSavingsOf(e);
-      if (e.cached) byDay[day].cached += 1;
-      // Scale heuristic tool-schema cost to actual billed cost so the ratio is accurate
-      const heuristic = e.attribution?.totalCost || 1;
-      byDay[day].toolCost += (e.attribution?.toolSchemas?.estimatedCost ?? 0) * (cost / heuristic);
-    }
-    const days = Object.values(byDay).sort((a, b) => a.date.localeCompare(b.date));
-    const spend30d    = days.reduce((s, d) => s + d.spend, 0);
-    const requests30d = days.reduce((s, d) => s + d.requests, 0);
-    return {
-      days,
-      totals: {
-        spend30d,
-        requests30d,
-        avgDailySpend: days.length > 0 ? spend30d / days.length : 0,
-      },
-    };
-  }
-
-  // Merges live session entries for today into the history days array so that
-  // alert thresholds see current-day spend even before history.jsonl is written.
-  function mergeSessionToday(days, sessionEntries) {
-    const today = new Date().toISOString().split('T')[0];
-    const todayE = sessionEntries.filter(e => e.timestamp && new Date(e.timestamp).toISOString().split('T')[0] === today);
-    if (todayE.length === 0) return days;
-
-    let spend = 0, saved = 0, cached = 0, toolCost = 0;
-    for (const e of todayE) {
-      const cost = realCostOf(e);
-      spend    += cost;
-      saved    += realSavingsOf(e);
-      if (e.cached) cached++;
-      const h = e.attribution.totalCost || 1;
-      toolCost += (e.attribution.toolSchemas.estimatedCost * cost / h);
-    }
-
-    const idx = days.findIndex(d => d.date === today);
-    const base = idx >= 0 ? days[idx] : { date: today, spend: 0, saved: 0, requests: 0, cached: 0, toolCost: 0 };
-    const merged = {
-      date: today,
-      spend:    base.spend    + spend,
-      saved:    base.saved    + saved,
-      requests: base.requests + todayE.length,
-      cached:   base.cached   + cached,
-      toolCost: base.toolCost + toolCost,
-    };
-
-    if (idx >= 0) {
-      return [...days.slice(0, idx), merged, ...days.slice(idx + 1)];
-    }
-    return [...days, merged].sort((a, b) => a.date.localeCompare(b.date));
-  }
-
   function loadLatestSimulation() {
     const simDir = resolve(process.cwd(), 'simulation-results');
     if (!existsSync(simDir)) return null;
@@ -848,28 +807,6 @@ if (command === 'serve') {
       if (!files.length) return null;
       return JSON.parse(readFileSync(join(simDir, files[0]), 'utf8'));
     } catch { return null; }
-  }
-
-  const ALERTS_CONFIG_PATH = resolve(process.cwd(), '.trimwares/alerts.json');
-
-  function loadAlertsConfig() {
-    if (!existsSync(ALERTS_CONFIG_PATH)) return {};
-    try {
-      const cfg = JSON.parse(readFileSync(ALERTS_CONFIG_PATH, 'utf8'));
-      // Migrate old single maxDailySpend → spendThresholds array
-      if (cfg.maxDailySpend != null && cfg.spendThresholds == null) {
-        cfg.spendThresholds = [cfg.maxDailySpend];
-        delete cfg.maxDailySpend;
-      }
-      return cfg;
-    } catch { return {}; }
-  }
-
-  function saveAlertsConfig(cfg) {
-    try {
-      mkdirSync(resolve(process.cwd(), '.trimwares'), { recursive: true });
-      writeFileSync(ALERTS_CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf8');
-    } catch { /* non-fatal */ }
   }
 
   // Fields guaranteed by normalizeEntry — always numbers, never undefined.
@@ -1265,7 +1202,8 @@ if (command === 'serve') {
     }
 
     if (urlPath === '/api/data') {
-      const entries     = filterByProject(loadSessionEntries(projectPath), project);
+      const allEntries = filterByProject(loadSessionEntries(projectPath), project);
+      const entries    = applyFreeTierFilter(allEntries);
       const waste       = deriveWasteReport(entries);
       const sessionAgg  = aggregateSessionAttribution(entries);
       const sessionCost = aggregateSessionCost(entries);
@@ -1288,21 +1226,6 @@ if (command === 'serve') {
       return;
     }
 
-    if (urlPath === '/api/history') {
-      const histEntries    = filterByProject(loadHistoryEntries(projectPath), project);
-      const sessionEntries = filterByProject(loadSessionEntries(projectPath), project);
-      const { days }       = groupHistoryByDay(histEntries);
-      const merged         = mergeSessionToday(days, sessionEntries);
-      const spend30d       = merged.reduce((s, d) => s + d.spend, 0);
-      const requests30d    = merged.reduce((s, d) => s + d.requests, 0);
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({
-        days: merged,
-        totals: { spend30d, requests30d, avgDailySpend: merged.length > 0 ? spend30d / merged.length : 0 },
-      }));
-      return;
-    }
-
     // ── Error log ────────────────────────────────────────────────────────────────
     if (urlPath === '/api/errors') {
       const dir      = process.env.TRIMWARES_LOG_DIR ?? '.trimwares';
@@ -1319,7 +1242,8 @@ if (command === 'serve') {
 
     // ── Models breakdown ────────────────────────────────────────────────────────
     if (urlPath === '/api/models') {
-      const entries = filterByProject(loadSessionEntries(projectPath), project);
+      const allModelEntries = filterByProject(loadSessionEntries(projectPath), project);
+      const entries         = applyFreeTierFilter(allModelEntries);
       const byModel = {};
       for (const e of entries) {
         const key = `${e.provider ?? 'unknown'}::${e.model ?? 'unknown'}`;
@@ -1346,7 +1270,8 @@ if (command === 'serve') {
 
     // ── Recommendations ──────────────────────────────────────────────────────────
     if (urlPath === '/api/recommendations') {
-      const entries      = filterByProject(loadSessionEntries(projectPath), project);
+      const allRecEntries = filterByProject(loadSessionEntries(projectPath), project);
+      const entries       = applyFreeTierFilter(allRecEntries);
       const waste        = deriveWasteReport(entries);
       const recs         = buildRecommendations(waste, entries);
       const score        = computeOptimizationScore(waste);
@@ -1361,131 +1286,7 @@ if (command === 'serve') {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       const expTs2 = license.tokenExpires ?? license.exp ?? 0;
       const expires = expTs2 ? new Date(expTs2 * 1000).toISOString().split('T')[0] : null;
-      res.end(JSON.stringify({ tier: license.tier ?? 'pro', email: license.email ?? '', expires }));
-      return;
-    }
-
-    // ── Alert config GET ────────────────────────────────────────────────────────
-    if (req.method === 'GET' && urlPath === '/api/alerts/config') {
-      const cfg = loadAlertsConfig();
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify(cfg));
-      return;
-    }
-
-    // ── Alert config POST (save thresholds) ─────────────────────────────────────
-    if (req.method === 'POST' && urlPath === '/api/alerts/config') {
-      let body = '';
-      req.on('data', chunk => { body += chunk; });
-      req.on('end', () => {
-        try {
-          const cfg = JSON.parse(body);
-          saveAlertsConfig(cfg);
-          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(JSON.stringify({ ok: true }));
-        } catch {
-          res.writeHead(400); res.end('Bad JSON');
-        }
-      });
-      return;
-    }
-
-    // ── Fire a test notification immediately ────────────────────────────────────
-    if (req.method === 'POST' && urlPath === '/api/alerts/test') {
-      let body = '';
-      req.on('data', chunk => { body += chunk; });
-      req.on('end', () => {
-        try {
-          const cfg = loadAlertsConfig();
-          const { title = 'Trimwares Trace', message = 'Test alert — notifications are working!' } = body ? JSON.parse(body) : {};
-          sendDesktopNotification(title, message, { sound: cfg.sound ?? false });
-          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(JSON.stringify({ ok: true }));
-        } catch {
-          res.writeHead(400); res.end('Bad JSON');
-        }
-      });
-      return;
-    }
-
-    // ── Alerts evaluation ───────────────────────────────────────────────────────
-    if (urlPath === '/api/alerts') {
-      const cfg       = loadAlertsConfig();
-      const history   = groupHistoryByDay(loadHistoryEntries(projectPath));
-      const days      = mergeSessionToday(history.days, loadSessionEntries(projectPath));
-      const rules     = buildRules(cfg);
-      const state     = loadAlertState();
-      // Replace generated timestamps with persisted first-triggered times so the
-      // UI shows when the alert actually crossed the threshold, not when the page loaded.
-      const triggered = evaluateAlerts(days, cfg).map(a => ({
-        ...a,
-        timestamp: state[a.ruleId] ?? a.timestamp,
-      }));
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ rules, triggered, config: cfg }));
-      return;
-    }
-
-    // ── Export ──────────────────────────────────────────────────────────────────
-    if (urlPath.startsWith('/api/export')) {
-      const fmt = new URL(req.url, 'http://localhost').searchParams.get('format') ?? 'json';
-      const entries = loadSessionEntries();
-      const history = groupHistoryByDay(loadHistoryEntries());
-      const waste   = deriveWasteReport(entries);
-
-      if (fmt === 'csv') {
-        const header = 'timestamp,requestId,provider,model,inputTokens,outputTokens,cost,savings,cached,latencyMs\n';
-        const rows = entries.map(e =>
-          [e.timestamp, e.requestId, e.provider, e.model,
-           e.realInputTokens ?? 0, e.realOutputTokens ?? 0,
-           (e.realCost ?? 0).toFixed(6), (e.realSavings ?? 0).toFixed(6),
-           e.cached ? 'true' : 'false', e.latencyMs ?? 0].join(',')
-        ).join('\n');
-        res.writeHead(200, {
-          'Content-Type': 'text/csv; charset=utf-8',
-          'Content-Disposition': 'attachment; filename="trimwares-export.csv"',
-        });
-        res.end(header + rows);
-        return;
-      }
-
-      if (fmt === 'md') {
-        const totalSpend = waste.currentSpend;
-        const saved      = waste.alreadySaved;
-        const md = [
-          '# Trimwares Trace — Cost Report',
-          '',
-          `**Generated:** ${new Date().toISOString().split('T')[0]}`,
-          `**Requests:** ${entries.length}  |  **Spend:** $${totalSpend.toFixed(6)}  |  **Saved:** $${saved.toFixed(6)}`,
-          '',
-          '## 30-Day History',
-          '',
-          '| Date | Spend | Saved | Requests |',
-          '|------|-------|-------|----------|',
-          ...(history.days.slice().reverse().map(d =>
-            `| ${d.date} | $${d.spend.toFixed(6)} | $${d.saved.toFixed(6)} | ${d.requests} |`
-          )),
-          '',
-          '## Spend by Category',
-          '',
-          ...waste.categories.map(c =>
-            `- **${c.label}**: $${c.cost.toFixed(6)} (${c.percentOfSpend}% of spend)`
-          ),
-        ].join('\n');
-        res.writeHead(200, {
-          'Content-Type': 'text/markdown; charset=utf-8',
-          'Content-Disposition': 'attachment; filename="trimwares-report.md"',
-        });
-        res.end(md);
-        return;
-      }
-
-      // Default: JSON
-      res.writeHead(200, {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Content-Disposition': 'attachment; filename="trimwares-export.json"',
-      });
-      res.end(JSON.stringify({ exportedAt: new Date().toISOString(), waste, history, entries }, null, 2));
+      res.end(JSON.stringify({ tier: license.tier ?? 'free', email: license.email ?? '', expires, isDeveloper, upgradeUrl: 'https://trimwares.com/trace' }));
       return;
     }
 
@@ -1518,110 +1319,6 @@ if (command === 'serve') {
   // Windows → Snoretoast (bundled) — proper Action Center registration
   // macOS   → terminal-notifier / osascript — native Notification Center
   // Linux   → notify-send / notifu — GNOME, KDE, XFCE
-
-  let _notifier = null;
-  async function getNotifier() {
-    if (_notifier) return _notifier;
-    const mod = await import('node-notifier');
-    _notifier = mod.default ?? mod;
-    return _notifier;
-  }
-
-  function sendDesktopNotification(title, message, { sound = false } = {}) {
-    getNotifier().then(notifier => {
-      notifier.notify({
-        title,
-        message,
-        sound,
-        wait: false,
-        appID: 'Trimwares.Trace',
-        icon: _iconPath,
-      }, (err) => {
-        if (err) {
-          // Fallback for Linux environments where node-notifier may not work
-          const safe = s => s.replace(/"/g, '\\"');
-          exec(`notify-send "${safe(title)}" "${safe(message)}" 2>/dev/null`);
-        }
-      });
-    }).catch(() => { /* non-fatal */ });
-  }
-
-  // ── Alert state tracking ──────────────────────────────────────────────────────
-  // once       → notify once per crossing; re-arms when condition clears
-  // moderate   → notify, then re-notify after intervalMinutes while still active
-  // persistent → notify every poll cycle while active
-
-  const notifiedAlerts   = new Set();        // 'once' mode: ruleIds already fired this crossing
-  const lastNotifiedTime = new Map();        // 'moderate' mode: ruleId → ms timestamp of last notify
-  let alertPollTimer     = null;
-
-  // Persist when each alert FIRST fired so the UI shows the real event time,
-  // not the time the dashboard last polled.
-  const ALERT_STATE_PATH = resolve(process.cwd(), '.trimwares/alert-state.json');
-  function loadAlertState() {
-    try { return JSON.parse(readFileSync(ALERT_STATE_PATH, 'utf8')); } catch { return {}; }
-  }
-  function saveAlertState(state) {
-    try {
-      mkdirSync(resolve(process.cwd(), '.trimwares'), { recursive: true });
-      writeFileSync(ALERT_STATE_PATH, JSON.stringify(state), 'utf8');
-    } catch { /* non-fatal */ }
-  }
-  let alertState = loadAlertState(); // { ruleId: firstTriggeredMs }
-
-  function pollAlerts() {
-    try {
-      const cfg = loadAlertsConfig();
-      if (Object.keys(cfg).length === 0) return;
-      const history  = groupHistoryByDay(loadHistoryEntries());
-      const days     = mergeSessionToday(history.days, loadSessionEntries());
-      const fired    = evaluateAlerts(days, cfg);
-      const firedIds = new Set(fired.map(a => a.ruleId));
-      const now      = Date.now();
-      const useSound = cfg.sound ?? false;
-
-      let stateChanged = false;
-      for (const alert of fired) {
-        // Record the real event time on first crossing — persisted so dashboard
-        // shows when it happened, not when the user next opened the page.
-        if (!alertState[alert.ruleId]) {
-          alertState[alert.ruleId] = now;
-          stateChanged = true;
-        }
-
-        // Dynamic spend_at_X.XX ruleIds all share the 'spend_threshold' notification config
-        const notifKey   = alert.type === 'spend_threshold' ? 'spend_threshold' : alert.ruleId;
-        const notifCfg   = cfg.notifications?.[notifKey] ?? {};
-        const mode       = notifCfg.mode ?? 'once';
-        const intervalMs = (notifCfg.intervalMinutes ?? 5) * 60 * 1000;
-
-        let shouldNotify = false;
-        if (mode === 'persistent') {
-          shouldNotify = true;
-        } else if (mode === 'moderate') {
-          const last = lastNotifiedTime.get(alert.ruleId) ?? 0;
-          if (now - last >= intervalMs) { shouldNotify = true; lastNotifiedTime.set(alert.ruleId, now); }
-        } else {
-          // 'once' (default)
-          if (!notifiedAlerts.has(alert.ruleId)) { shouldNotify = true; notifiedAlerts.add(alert.ruleId); }
-        }
-
-        if (shouldNotify) {
-          sendDesktopNotification('Trimwares Trace', alert.message, { sound: useSound });
-          console.log(`\n  \x1b[33m⚠  Alert: ${alert.label}\x1b[0m`);
-          console.log(`  ${alert.message}`);
-          console.log(`  \x1b[90mView: http://localhost:${PORT}/alerts\x1b[0m\n`);
-        }
-      }
-      // Clear state for resolved alerts
-      for (const id of notifiedAlerts)   { if (!firedIds.has(id)) notifiedAlerts.delete(id); }
-      for (const id of lastNotifiedTime.keys()) { if (!firedIds.has(id)) lastNotifiedTime.delete(id); }
-      for (const id of Object.keys(alertState)) {
-        if (!firedIds.has(id)) { delete alertState[id]; stateChanged = true; }
-      }
-      if (stateChanged) saveAlertState(alertState);
-    } catch { /* non-fatal */ }
-  }
 
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
@@ -1663,12 +1360,9 @@ if (command === 'serve') {
                  : `xdg-open ${url}`;
     exec(opener);
 
-    // Start background alert polling — fires desktop notifications independently of dashboard
-    alertPollTimer = setInterval(pollAlerts, 30_000);
   });
 
   process.on('SIGINT', () => {
-    if (alertPollTimer) clearInterval(alertPollTimer);
     server.close();
     process.exit(0);
   });
