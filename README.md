@@ -2,9 +2,11 @@
 
 **See exactly where your AI money goes — and cut it.**
 
-Local-first LLM cost observability. Token attribution by category, a live 7-day dashboard, and built-in optimizations that reduce spend before requests leave your app. No prompts leave your machine. No account required. Works in 30 seconds.
+Which part of your prompt is expensive? System prompts? Tool schemas? Conversation history? Trace breaks every LLM call into six cost categories so you can see exactly what to fix — in real time, entirely on your machine.
 
-→ **[trimwares.com/trace](https://www.trimwares.com/trace)**
+> **No proxy. No cloud. No account.** Your app calls the provider directly. Trace intercepts in-process — zero latency added, zero prompt data sent anywhere.
+
+→ **[trimwares.com/trace](https://www.trimwares.com/trace)** · OpenAI · Anthropic · Groq · Gemini · Ollama · Apache 2.0
 
 ```
   ⚡ Trimwares Trace — Cost Report
@@ -128,12 +130,12 @@ No account. No expiry. No data leaving your machine.
 
 | Feature | Free |
 |---|---|
+| Token attribution by category (system prompt, tools, RAG, history, query, output) | ✓ |
+| Optimization recommendations with projected savings — from your actual data | ✓ |
+| `npx trimwares analyze` — full terminal cost report | ✓ |
+| 7-day local dashboard (`npx trimwares serve`) | ✓ |
 | SDK wrappers — OpenAI, Anthropic, Groq, Gemini, Ollama | ✓ |
 | All built-in optimizations (response cache, native prompt caching, model router, tool filter, context pruner) | ✓ |
-| `npx trimwares analyze` — full terminal cost report | ✓ |
-| Token attribution by category (system prompt, tools, RAG, history, query, output) | ✓ |
-| Optimization recommendations with projected savings | ✓ |
-| 7-day local dashboard (`npx trimwares serve`) | ✓ |
 | Session log — local metadata only, never prompt text | ✓ |
 | Streaming support | ✓ |
 | Works offline, air-gapped, and in CI | ✓ |
