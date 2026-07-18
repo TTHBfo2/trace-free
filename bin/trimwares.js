@@ -363,7 +363,8 @@ if (command === 'login') {
   console.log(`  Tier:    \x1b[36m${workerTier}\x1b[0m`);
   if (workerEmail) console.log(`  Email:   ${workerEmail}`);
   console.log(`  Expires: ${workerExpires}`);
-  console.log(`\n  Run \x1b[33mnpx trimwares serve\x1b[0m to open the dashboard.\n`);
+  console.log(`\n  Run \x1b[33mnpx trimwares serve\x1b[0m to open the dashboard.`);
+  console.log(`  \x1b[90mDocs & changelog: \x1b[36mtrace.trimwares.com\x1b[0m\n`);
   process.exit(0);
 }
 
@@ -376,9 +377,11 @@ if (command === 'clear') {
   const sessPath = joinPath(process.cwd(), dir, 'session.jsonl');
   if (existsSync(sessPath)) {
     await _archiveSession(sessPath);  // silent — user sees nothing, data preserved locally
-    console.log('\n  Session cleared.\n');
+    console.log('\n  Session cleared.');
+    console.log('  \x1b[90mDocs: \x1b[36mtrace.trimwares.com\x1b[0m\n');
   } else {
-    console.log('\n  Nothing to clear.\n');
+    console.log('\n  Nothing to clear.');
+    console.log('  \x1b[90mDocs: \x1b[36mtrace.trimwares.com\x1b[0m\n');
   }
   process.exit(0);
 }
@@ -423,7 +426,8 @@ if (command === 'deactivate') {
   if (existsSync(configPath)) unlinkSync(configPath);
 
   console.log('\n  \x1b[32m✓ License removed from this machine\x1b[0m');
-  console.log('  Re-activate any time with \x1b[33mnpx trimwares login --key YOUR_KEY\x1b[0m\n');
+  console.log('  Re-activate any time with \x1b[33mnpx trimwares login --key YOUR_KEY\x1b[0m');
+  console.log('  \x1b[90mGet a new license: \x1b[36mtrace.trimwares.com\x1b[0m\n');
   process.exit(0);
 }
 
@@ -462,7 +466,8 @@ if (command === 'add') {
   const registry = await loadProjectRegistry();
   const alreadyAdded = registry.find(p => p.path === targetPath);
   if (alreadyAdded) {
-    console.log(`\n  \x1b[33m⚠  Already registered:\x1b[0m ${alreadyAdded.name} (${targetPath})\n`);
+    console.log(`\n  \x1b[33m⚠  Already registered:\x1b[0m ${alreadyAdded.name} (${targetPath})`);
+    console.log(`  \x1b[90mDocs: \x1b[36mtrace.trimwares.com\x1b[0m\n`);
     process.exit(0);
   }
 
@@ -525,7 +530,8 @@ if (command === 'daemon') {
       await run(`launchctl load -w "${plistPath}"`);
       console.log('\n  \x1b[32m✓ Daemon started\x1b[0m — Trimwares Trace runs at boot');
       console.log(`  Dashboard: \x1b[36mhttp://localhost:7778\x1b[0m`);
-      console.log(`  Logs: ${pathJoin(logDir, 'daemon.log')}\n`);
+      console.log(`  Logs:      ${pathJoin(logDir, 'daemon.log')}`);
+      console.log(`  \x1b[90mDocs: \x1b[36mtrace.trimwares.com\x1b[0m\n`);
     } else if (subcommand === 'stop') {
       try { await run(`launchctl unload "${plistPath}"`); console.log('\n  \x1b[32m✓ Daemon stopped\x1b[0m\n'); }
       catch { console.error('\n  \x1b[31m✗ Daemon not running\x1b[0m\n'); }
@@ -569,7 +575,8 @@ if (command === 'daemon') {
       }).unref();
       console.log('\n  \x1b[32m✓ Daemon started\x1b[0m — Trimwares Trace runs at login');
       if (usedStartup) console.log('  \x1b[90m(registered via Startup folder — Task Scheduler unavailable)\x1b[0m');
-      console.log(`  Dashboard: \x1b[36mhttp://localhost:7778\x1b[0m\n`);
+      console.log(`  Dashboard: \x1b[36mhttp://localhost:7778\x1b[0m`);
+      console.log(`  \x1b[90mDocs: \x1b[36mtrace.trimwares.com\x1b[0m\n`);
     } else if (subcommand === 'stop') {
       let stopped = false;
       try { await run(`schtasks /end /tn "${taskName}"`); stopped = true; } catch { /* ok */ }
@@ -624,7 +631,8 @@ WantedBy=default.target
       await run('systemctl --user start trimwares');
       console.log('\n  \x1b[32m✓ Daemon started\x1b[0m — Trimwares Trace runs at login');
       console.log(`  Dashboard: \x1b[36mhttp://localhost:7778\x1b[0m`);
-      console.log(`  Status: \x1b[33msystemctl --user status trimwares\x1b[0m\n`);
+      console.log(`  Status:    \x1b[33msystemctl --user status trimwares\x1b[0m`);
+      console.log(`  \x1b[90mDocs: \x1b[36mtrace.trimwares.com\x1b[0m\n`);
     } else if (subcommand === 'stop') {
       try { await run('systemctl --user stop trimwares'); console.log('\n  \x1b[32m✓ Daemon stopped\x1b[0m\n'); }
       catch { console.error('\n  \x1b[31m✗ Daemon not running\x1b[0m\n'); }
@@ -1394,6 +1402,7 @@ if (command === 'serve') {
 
 else {
   console.error(`\n  Unknown command: ${command}`);
-  console.error('  Usage: npx trimwares analyze | serve | add [path] | daemon start|stop|status | login --key KEY | clear\n');
+  console.error('  Usage: npx trimwares analyze | serve | add [path] | daemon start|stop|status | login --key KEY | clear');
+  console.error('  \x1b[90mDocs: \x1b[36mtrace.trimwares.com\x1b[0m\n');
   process.exit(1);
 }

@@ -66,6 +66,7 @@ const anthropic = trimwares.anthropic(new Anthropic());
 
 **Groq**
 ```ts
+import { trimwares } from '@trimwares/trace';
 import OpenAI from 'openai';
 
 const groq = trimwares.groq(
@@ -75,6 +76,7 @@ const groq = trimwares.groq(
 
 **Gemini**
 ```ts
+import { trimwares } from '@trimwares/trace';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
 const gemini = trimwares.gemini(new GoogleGenerativeAI(process.env.GEMINI_API_KEY));
@@ -83,6 +85,7 @@ const model  = gemini.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
 **Ollama**
 ```ts
+import { trimwares } from '@trimwares/trace';
 import OpenAI from 'openai';
 
 const ollama = trimwares.ollama(
@@ -92,12 +95,15 @@ const ollama = trimwares.ollama(
 
 Run your app normally. Trimwares writes a local metadata log — token counts, costs, attribution, latency — to `.trimwares/session.jsonl`. Never the prompt text.
 
-Then:
+Then open the dashboard:
 
 ```bash
-npx trimwares add .       # register this project
-npx trimwares serve       # open your dashboard → http://localhost:7778
+npx trimwares serve
 ```
+
+Opens at `http://localhost:7778`. Your current project registers automatically — no extra command needed. To add projects from other directories: `npx trimwares add <path>`.
+
+> **Don't see data yet?** Make sure your app has made at least one LLM call after wrapping the client. The dashboard polls every 2.5 s — data appears within seconds of your first request.
 
 → **[trace.trimwares.com](https://trace.trimwares.com)** — full docs and more examples
 
@@ -107,9 +113,9 @@ npx trimwares serve       # open your dashboard → http://localhost:7778
 
 | Command | What it does |
 |---|---|
-| `npx trimwares add .` | Register the current directory as a tracked project |
+| `npx trimwares serve` | Open the local dashboard at `localhost:7778` — live-polling, 7-day history. Auto-registers your current project. |
 | `npx trimwares analyze` | Terminal cost report — attribution breakdown + savings opportunities |
-| `npx trimwares serve` | Open the local dashboard at `localhost:7778` — live-polling, 7-day history |
+| `npx trimwares add <path>` | Register an additional project directory *(optional — `serve` auto-registers your current directory)* |
 | `npx trimwares clear` | Clear the current session log |
 | `npx trimwares login --key KEY` | Activate a Developer license key |
 | `npx trimwares check` | CI gate — fails if spend/cache/tool-overhead exceed configured thresholds *(Developer)* |
