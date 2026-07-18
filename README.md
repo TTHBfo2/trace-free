@@ -130,7 +130,6 @@ No account. No expiry. No data leaving your machine.
 | 7-day local dashboard (`npx trimwares serve`) | ✓ |
 | Session log — local metadata only, never prompt text | ✓ |
 | Streaming support | ✓ |
-| Multi-project dashboard with file browser | ✓ |
 | Works offline, air-gapped, and in CI | ✓ |
 | Apache 2.0 license | ✓ |
 
@@ -145,6 +144,7 @@ The Developer tier is in active development. Here's what's coming:
 | Feature | Developer |
 |---|---|
 | Everything in Free | ✓ |
+| Multi-project dashboard with file browser | Soon |
 | Unlimited local history — no 7-day window | Soon |
 | Spend alerts + anomaly detection | Soon |
 | Export your data — JSON and CSV | Soon |
