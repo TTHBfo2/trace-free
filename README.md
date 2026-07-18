@@ -1,26 +1,29 @@
 # Trimwares Trace
 
-**See exactly where your AI money goes.**
+**See exactly where your AI money goes — and cut it.**
 
-Local-first AI cost observability and optimization for LLM applications. Trimwares Trace shows you where every token is being spent — system prompts, tool schemas, RAG chunks, conversation history, user queries — and applies local optimizations to reduce unnecessary spend. No usage data ever leaves your machine.
+Local-first LLM cost observability. Token attribution by category, a live 7-day dashboard, and built-in optimizations that reduce spend before requests leave your app. No prompts leave your machine. No account required. Works in 30 seconds.
 
-→ **[trimwares.com/trace](https://trimwares.com/trace)** — Developer: full dashboard + unlimited history · Team: CI gate + cloud sync
+→ **[trace.trimwares.com](https://trace.trimwares.com)**
 
 ```
   ⚡ Trimwares Trace — Cost Report
   ────────────────────────────────────────────────────────────
-  Total Spend       $0.0312   (5.4K tokens)
+  Total Spend       $0.0312
+  Total Tokens      5.4K  (4.6K in / 0.8K out)
   Requests          21  (5 cache hits · 23.8% hit rate)
+  Native Caching    38.1% of requests had provider cache applied
 
   Where your tokens went
+
   System prompts    ████████████████░░░░░░░░  71%  ⚠ cacheable
   Tool schemas      ████░░░░░░░░░░░░░░░░░░░░  15%  ⚠ cacheable
+  Conv. history     ██░░░░░░░░░░░░░░░░░░░░░░   9%
   User queries      █░░░░░░░░░░░░░░░░░░░░░░░   5%
-  Output            ███░░░░░░░░░░░░░░░░░░░░░   9%
+  Output tokens     ░░░░░░░░░░░░░░░░░░░░░░░░   0%
 
-  Top action: cache system prompt prefix → save ~$0.85/mo
   ────────────────────────────────────────────────────────────
-  trimwares.com/trace — Developer: full dashboard · Team: CI gate + cloud sync
+  Developer: unlimited history + spend alerts + export — trace.trimwares.com
 ```
 
 ---
@@ -31,12 +34,15 @@ Local-first AI cost observability and optimization for LLM applications. Trimwar
 npm install @trimwares/trace
 ```
 
+> After install, your terminal will print a quick-start guide automatically.
+
 ---
 
 ## 30-second setup
 
-Wrap your existing LLM client. Your code doesn't change.
+Wrap your existing LLM client. Your app code doesn't change.
 
+**OpenAI**
 ```ts
 import { trimwares } from '@trimwares/trace';
 import OpenAI from 'openai';
@@ -50,13 +56,50 @@ const response = await openai.chat.completions.create({
 });
 ```
 
-Then from your project root:
+**Anthropic**
+```ts
+import { trimwares } from '@trimwares/trace';
+import Anthropic from '@anthropic-ai/sdk';
 
-```bash
-npx trimwares analyze
+const anthropic = trimwares.anthropic(new Anthropic());
 ```
 
-That's it. The package writes a local metadata log (`.trimwares/session.jsonl`) on every LLM call — token counts, costs, attribution categories, latency. Never the prompt text itself.
+**Groq**
+```ts
+import OpenAI from 'openai';
+
+const groq = trimwares.groq(
+  new OpenAI({ apiKey: process.env.GROQ_API_KEY, baseURL: 'https://api.groq.com/openai/v1' })
+);
+```
+
+**Gemini**
+```ts
+import { GoogleGenerativeAI } from '@google/generative-ai';
+
+const gemini = trimwares.gemini(new GoogleGenerativeAI(process.env.GEMINI_API_KEY));
+const model  = gemini.getGenerativeModel({ model: 'gemini-1.5-flash' });
+```
+
+**Ollama**
+```ts
+import OpenAI from 'openai';
+
+const ollama = trimwares.ollama(
+  new OpenAI({ baseURL: 'http://localhost:11434/v1', apiKey: 'ollama' })
+);
+```
+
+Run your app normally. Trimwares writes a local metadata log — token counts, costs, attribution, latency — to `.trimwares/session.jsonl`. Never the prompt text.
+
+Then:
+
+```bash
+npx trimwares add .       # register this project
+npx trimwares serve       # open your dashboard → http://localhost:7778
+```
+
+→ **[trace.trimwares.com](https://trace.trimwares.com)** — full docs and more examples
 
 ---
 
@@ -64,84 +107,91 @@ That's it. The package writes a local metadata log (`.trimwares/session.jsonl`) 
 
 | Command | What it does |
 |---|---|
-| `npx trimwares analyze` | Terminal cost report — attribution breakdown + top savings action |
-| `npx trimwares serve` | **Developer** — opens local dashboard at localhost:7778, live polling |
-| `npx trimwares login --key KEY` | Activate a Developer or Team license key |
-| `npx trimwares clear` | Clear current session log |
-| `npx trimwares check` | **Team** — CI gate — fails if spend/cache/tool% exceed configured thresholds |
+| `npx trimwares add .` | Register the current directory as a tracked project |
+| `npx trimwares analyze` | Terminal cost report — attribution breakdown + savings opportunities |
+| `npx trimwares serve` | Open the local dashboard at `localhost:7778` — live-polling, 7-day history |
+| `npx trimwares clear` | Clear the current session log |
+| `npx trimwares login --key KEY` | Activate a Developer license key |
+| `npx trimwares check` | CI gate — fails if spend/cache/tool-overhead exceed configured thresholds *(Developer)* |
 
 ---
 
-## Free vs Developer vs Team
+## What you get — free, forever
 
-|  | Free | Developer | Team |
-|---|---|---|---|
-| All SDK optimizations | ✓ | ✓ | ✓ |
-| `npx trimwares analyze` — terminal report | ✓ | ✓ | ✓ |
-| Attribution breakdown + recommendations | ✓ | ✓ | ✓ |
-| Session log (`.trimwares/session.jsonl`) | ✓ | ✓ | ✓ |
-| 7-day local dashboard | ✓ | ✓ | ✓ |
-| Full dashboard — unlimited local history | — | ✓ | ✓ |
-| Spend alerts + anomaly detection | — | ✓ | ✓ |
-| Trends + export (JSON/CSV) | — | ✓ | ✓ |
-| CI gate (`npx trimwares check`) | — | — | ✓ |
-| Cloud sync + shared dashboards | — | — | ✓ |
-| Slack / email budget alerts | — | — | ✓ |
-| License required | None | $79 lifetime · [trimwares.com/trace](https://trimwares.com/trace) | $20/user/mo |
-| Data leaves your machine | Never | Never | Only sync data |
+No account. No expiry. No data leaving your machine.
 
-After activation, the license is verified **locally** using an Ed25519 signature — no server round-trip required on subsequent runs.
+| Feature | Free |
+|---|---|
+| SDK wrappers — OpenAI, Anthropic, Groq, Gemini, Ollama | ✓ |
+| All built-in optimizations (response cache, native prompt caching, model router, tool filter, context pruner) | ✓ |
+| `npx trimwares analyze` — full terminal cost report | ✓ |
+| Token attribution by category (system prompt, tools, RAG, history, query, output) | ✓ |
+| Optimization recommendations with projected savings | ✓ |
+| 7-day local dashboard (`npx trimwares serve`) | ✓ |
+| Session log — local metadata only, never prompt text | ✓ |
+| Streaming support | ✓ |
+| Multi-project dashboard with file browser | ✓ |
+| Works offline, air-gapped, and in CI | ✓ |
+| Apache 2.0 license | ✓ |
+
+→ **[See everything it can do at trace.trimwares.com](https://trace.trimwares.com)**
 
 ---
 
-## Getting started with Developer
+## Developer tier — coming soon
 
-1. **Purchase** at [trimwares.com/trace](https://trimwares.com/trace) — $79 lifetime, early adopter price (checkout via Lemon Squeezy)
-2. **Check your email** — your license key arrives instantly after checkout
-3. **Activate** in your project directory:
-   ```bash
-   npx trimwares login --key <your-license-key>
-   ```
-4. **Open the dashboard:**
-   ```bash
-   npx trimwares serve
-   ```
-   Dashboard opens at [localhost:7778](http://localhost:7778) — full dashboard, unlimited local history, alerts, and export.
+The Developer tier is in active development. Here's what's coming:
 
-> **Lifetime means lifetime.** You keep your version forever. The first year of updates is included — after that, new major releases are available for a small upgrade fee (pricing to be announced). Keep what you have, or grab the latest. Your choice, no pressure.
+| Feature | Developer |
+|---|---|
+| Everything in Free | ✓ |
+| Unlimited local history — no 7-day window | Soon |
+| Spend alerts + anomaly detection | Soon |
+| Export your data — JSON and CSV | Soon |
+| CI gate (`npx trimwares check`) | Soon |
+| Advanced dashboard views | Soon |
+| More features being added — stay tuned | ✓ |
+
+**Want early access or have a specific feature in mind?**
+
+[Email us at hello@trimwares.com](mailto:hello@trimwares.com?subject=Developer%20tier%20interest) — we read every message and are actively shaping the roadmap based on what developers actually need.
+
+→ **[Follow progress and get notified at trace.trimwares.com](https://trace.trimwares.com)**
 
 ---
 
 ## What it tracks
 
-Every call is broken down into six attribution categories:
+Every LLM call is broken down into six attribution categories:
 
 | Category | What it is | Why it matters |
 |---|---|---|
-| **System prompt** | Your static instructions | Repeated verbatim on every call — highly cacheable |
-| **Tool schemas** | JSON definitions sent with each step | Often 20–40% of agent token spend, sent even when unused |
-| **RAG chunks** | Retrieved context injected per call | Can be deduplicated with provider-native prefix caching |
-| **Conversation history** | Prior turns sent for context | Grows unbounded; rolling window fixes most of the cost |
+| **System prompt** | Your static instructions sent on every call | Highly repetitive — ideal for provider-native prefix caching |
+| **Tool schemas** | JSON tool definitions sent with each step | Often 15–40% of agent spend, sent even when unused |
+| **RAG chunks** | Retrieved context injected per call | Can be deduplicated with prefix caching |
+| **Conversation history** | Prior turns sent for context | Grows unbounded — rolling window fixes most of the cost |
 | **User query** | The actual user message | Typically 5% of total — the smallest slice |
-| **Output** | The model's response | Irreducible — genuine work |
+| **Output tokens** | The model's response | Irreducible — genuine work |
 
-The terminal report and dashboard show exactly how your spend splits across these categories for every session.
+The terminal report and dashboard show exactly how your spend breaks down across these categories, session by session.
 
 ---
 
 ## What it optimizes
 
-| Optimization | How it works | Verified saving |
+| Optimization | How it works | Typical saving |
 |---|---|---|
-| **Response cache** | Identical requests served from memory at $0 | Exactly = your repeat-request % |
-| **Native prompt caching** | Injects Anthropic `cache_control` on stable system prompt + tool prefixes | 90% on those token prefixes (≥ 1,024 tokens; **≥ 4,096 tokens for Claude Haiku 4.5**) |
-| **Tool schema filter** | Agents: only sends tools relevant to the current step | 5–15% per step |
-| **Model router** | Routes simple requests to the cheapest capable model in the same provider | **94% per routed call** (opt-in) |
+| **Response cache** | Identical requests served from local memory at $0 | Exactly = your repeat-request % |
+| **Native prompt caching** | Injects Anthropic `cache_control` on stable system prompt + tool prefixes | 90% on those token prefixes (≥ 1,024 tokens; ≥ 4,096 for Claude Haiku 4.5) |
+| **Tool schema filter** | Only sends tools relevant to the current agent step | 5–15% per step (activates with ≥ 3 tools) |
+| **Model router** | Routes simple requests to the cheapest capable model in the same provider | Up to 94% per routed call (opt-in) |
 | **Context pruner** | Trims low-relevance history turns from long conversations | Configurable (opt-in) |
 
-**On the numbers:** The 94% routing saving is mathematically verified — 13 BPE tokens at GPT-4o pricing ($2.50/MTok) vs GPT-4o-mini pricing ($0.15/MTok). Response cache savings are pure math equal to your repeat traffic percentage. Savings vary by workload; benefits are largest for apps with repeated or structurally similar requests (support bots, FAQ, RAG). Open-ended or unique queries see little benefit from caching.
+**On the numbers:** The 94% model-routing saving is mathematically derived — 13 BPE tokens at GPT-4o pricing ($2.50/MTok) vs GPT-4o-mini ($0.15/MTok). Response cache savings equal your exact repeat-traffic percentage. Benefits are largest for apps with structurally similar requests: support bots, FAQ systems, RAG pipelines. Open-ended or unique queries see little benefit from caching.
 
-**Streaming:** Supported. On a cache miss the stream passes through normally while Trimwares collects chunks in the background — latency and attribution are recorded when the stream ends. On a cache hit the cached response is replayed as a stream so your code path stays identical. No changes required on your side.
+**Streaming:** Fully supported. On a cache miss the stream passes through normally while Trimwares collects chunks in the background. On a cache hit the cached response replays as a stream — your code path stays identical.
+
+→ **[trace.trimwares.com](https://trace.trimwares.com)** — benchmarks and methodology
 
 ---
 
@@ -149,23 +199,24 @@ The terminal report and dashboard show exactly how your spend splits across thes
 
 | Provider | Status |
 |---|---|
-| OpenAI (GPT-4o, GPT-4o-mini, GPT-4-turbo) | ✓ Implemented · **live-tested** (2026-07-12) |
-| Anthropic (Haiku 4.5, Sonnet 4.6, Opus 4.7) | ✓ Implemented · **live-tested** (2026-07-12) |
-| Groq (LLaMA 3.3 70B, LLaMA 3.1 8B, Mixtral) | ✓ Implemented · **live-tested** (2026-06-15) |
-| Google Gemini (1.5 Pro, 1.5 Flash, 2.0 Flash) | ✓ Implemented · unit-tested |
-| Ollama (any local model) | ✓ Implemented · unit-tested |
-
-Azure OpenAI and OpenRouter are also supported — pass an OpenAI client configured with the appropriate `baseURL`:
+| OpenAI (GPT-4o, GPT-4o-mini, GPT-4-turbo, o1, o3) | ✓ Implemented · **live-tested** |
+| Anthropic (Claude Haiku 4.5, Sonnet 4.6, Opus 4.8) | ✓ Implemented · **live-tested** |
+| Groq (LLaMA 3.3 70B, LLaMA 3.1 8B, Mixtral) | ✓ Implemented · **live-tested** |
+| Google Gemini (1.5 Pro, 1.5 Flash, 2.0 Flash) | ✓ Implemented |
+| Ollama (any local model) | ✓ Implemented |
+| Azure OpenAI | ✓ Via OpenAI client + `baseURL` |
+| OpenRouter | ✓ Via OpenAI client + `baseURL` |
 
 ```ts
-import OpenAI from 'openai';
-import { trimwares } from '@trimwares/trace';
-
 // Azure OpenAI
-const azure = trimwares.azure(new OpenAI({ baseURL: '...', apiKey: '...' }));
+const azure = trimwares.azure(
+  new OpenAI({ baseURL: 'https://<resource>.openai.azure.com', apiKey: '...' })
+);
 
 // OpenRouter
-const openrouter = trimwares.openrouter(new OpenAI({ baseURL: 'https://openrouter.ai/api/v1', apiKey: '...' }));
+const openrouter = trimwares.openrouter(
+  new OpenAI({ baseURL: 'https://openrouter.ai/api/v1', apiKey: '...' })
+);
 ```
 
 ---
@@ -174,35 +225,35 @@ const openrouter = trimwares.openrouter(new OpenAI({ baseURL: 'https://openroute
 
 Most LLM observability tools proxy your traffic through their servers. That means your prompts leave your infrastructure before they reach OpenAI or Anthropic.
 
-Trimwares Trace runs entirely inside your application process:
+Trimwares Trace runs **entirely inside your application process**:
 
 ```
 Your App → trimwares → OpenAI / Anthropic   ← no proxy, no third party
                 ↓
-         .trimwares/session.jsonl  (local, metadata only — never prompt text)
+         .trimwares/session.jsonl  (local metadata only — never prompt text)
 ```
 
-The session log contains only:
+The session log records only:
 
 ```json
 {
-  "timestamp": "2026-06-10T09:14:22.000Z",
+  "timestamp": "2026-07-17T09:14:22.000Z",
   "provider": "openai",
   "model": "gpt-4o",
   "attribution": {
-    "systemPrompt":         { "tokens": 312, "estimatedCost": 0.00078 },
-    "toolSchemas":          { "tokens": 89,  "estimatedCost": 0.00022 },
-    "ragChunks":            { "tokens": 0,   "estimatedCost": 0 },
-    "conversationHistory":  { "tokens": 45,  "estimatedCost": 0.00011 },
-    "userQuery":            { "tokens": 22,  "estimatedCost": 0.000055 },
-    "outputTokens":         { "tokens": 118, "estimatedCost": 0.000472 }
+    "systemPrompt":        { "tokens": 312, "estimatedCost": 0.00078 },
+    "toolSchemas":         { "tokens": 89,  "estimatedCost": 0.00022 },
+    "ragChunks":           { "tokens": 0,   "estimatedCost": 0 },
+    "conversationHistory": { "tokens": 45,  "estimatedCost": 0.000113 },
+    "userQuery":           { "tokens": 22,  "estimatedCost": 0.000055 },
+    "outputTokens":        { "tokens": 118, "estimatedCost": 0.000472 }
   },
   "latencyMs": 843,
   "cached": false
 }
 ```
 
-Never the text. Cache keys are SHA-256 hashes — the original content is not recoverable. Safe for healthcare, finance, legal, and air-gapped deployments without any configuration.
+Never the text. Cache keys are SHA-256 hashes — the original content is not recoverable. Safe for healthcare, finance, legal, and air-gapped deployments with no configuration required.
 
 ---
 
@@ -210,42 +261,62 @@ Never the text. Cache keys are SHA-256 hashes — the original content is not re
 
 | | Portkey / Helicone | GPTCache | Trimwares Trace |
 |---|---|---|---|
-| Prompts leave your infrastructure | Yes — cloud proxy | No | No |
-| Works without internet | No | Yes | Yes |
-| Cross-provider unified view | No | No | Yes |
-| Token attribution by category | No | No | Yes |
-| Pre-call optimization | No | No | Yes |
-| Streaming support | Yes | No | Yes |
-| One-line install | Yes | No | Yes |
-| Model routing | Paid | No | Yes (opt-in) |
+| Prompts leave your infrastructure | Yes — cloud proxy | No | **No** |
+| Works without internet | No | Yes | **Yes** |
+| Cross-provider unified view | No | No | **Yes** |
+| Token attribution by category | No | No | **Yes** |
+| Pre-call optimization | No | No | **Yes** |
+| Streaming support | Yes | No | **Yes** |
+| One-line setup | Yes | No | **Yes** |
+| Model routing | Paid | No | **Yes (opt-in)** |
+| Local dashboard | No | No | **Yes** |
+| Free tier with real features | No | Yes | **Yes** |
+
+→ **[trace.trimwares.com](https://trace.trimwares.com)** — full comparison
 
 ---
 
 ## Configuration
 
-Zero-config by default. All optimizations are on with conservative settings.
+Zero-config by default. All optimizations run with conservative settings out of the box.
 
 ```ts
 const openai = trimwares.openai(new OpenAI(), {
+  labels: { project: 'my-app', environment: 'production' },  // group requests in dashboard
   cache: {
-    response:  { ttlMs: 5 * 60 * 1000 },   // default: 5 min TTL; raise for stable prompts
-    // Semantic cache — uses all-MiniLM-L6-v2 local embeddings (@xenova/transformers, ~23MB,
-    // downloaded once). Disabled by default: stress testing showed false positives on
-    // same-structure questions (e.g. "capital of France?" matching "capital of Germany?").
-    // Enable only for workloads with near-identical repeated queries (support bots, FAQ).
-    semantic:  { enabled: false, similarityThreshold: 0.97 },
-    plan:      { enabled: false },                 // disable agent plan cache
+    response: { ttlMs: 5 * 60 * 1000 },  // response cache TTL (default: 5 min)
+    semantic:  { enabled: false, similarityThreshold: 0.97 }, // off by default — enable for FAQ/support bots
+    plan:      { enabled: false },         // agent plan cache
   },
   optimization: {
     routeToCheapestModel: false,  // opt-in — you chose your model for a reason
     filterToolSchemas:    true,   // on by default — only activates with ≥ 3 tools
-    pruneContext:         false,  // opt-in — enable for long-running conversations
+    pruneContext:         false,  // opt-in — for long-running conversations
   },
 });
 ```
+
+**Semantic cache note:** Uses `all-MiniLM-L6-v2` local embeddings via `@xenova/transformers` (~23 MB, downloaded once). Disabled by default because stress testing showed false positives on structurally similar but semantically different queries (e.g. "capital of France?" matching "capital of Germany?"). Enable only for workloads with near-identical repeated queries.
+
+---
+
+## Dashboard
+
+```bash
+npx trimwares serve
+```
+
+Opens at `http://localhost:7778`. Auto-registers your current project. Add additional projects from the dashboard at any time using the built-in file browser — no CLI needed.
+
+The dashboard polls every 2.5 seconds, so it stays live while your app runs. Shows the last 7 days of data for free users.
+
+→ **[trace.trimwares.com](https://trace.trimwares.com)** — screenshots and roadmap
 
 ---
 
 ## License
 
-Apache 2.0
+Apache 2.0 — free to use, modify, and distribute.
+
+Questions, feedback, or want early access to the Developer tier?
+**[hello@trimwares.com](mailto:hello@trimwares.com)** · **[trace.trimwares.com](https://trace.trimwares.com)**

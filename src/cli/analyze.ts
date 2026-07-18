@@ -52,7 +52,7 @@ export interface AnalyzeOptions {
 export function renderReport(options: AnalyzeOptions): string {
   const { entries, isPro = false } = options;
   if (entries.length === 0) {
-    return `\n${yellow('No session data found.')} Run your app with LLMCostTrimmer first.\n`;
+    return `\n${yellow('No session data found.')} Run your app with Trimwares Trace first.\n`;
   }
 
   const lines: string[] = [];
@@ -257,9 +257,9 @@ export function renderReport(options: AnalyzeOptions): string {
   lines.push(dim('  Token counts: BPE tokenizer (cl100k_base) — within ~2% of provider counts.'));
   lines.push(dim('  Costs: provider list pricing — verify exact amounts against your invoice.'));
   if (!isPro) {
-    lines.push(dim('  Pro: monthly savings recommendations + 30-day history — trimwares.com/pro'));
+    lines.push(dim('  Developer: unlimited history + spend alerts + export — trimwares.com/trace'));
   } else {
-    lines.push(dim('  Dashboard: npx trimwares serve · history, alerts, and full analytics.'));
+    lines.push(dim('  Dashboard: npx trimwares serve · 7-day local dashboard.'));
   }
   lines.push('');
 

@@ -10,8 +10,7 @@ coverage/
 .trimwares-test-*/
 .trimwares-verify-*/
 
-tests/blackbox/node_modules/
-tests/blackbox/package-lock.json
+tests/
 
 workers/**/.credentials
 workers/**/.dev.vars
@@ -20,3 +19,4 @@ workers/**/.wrangler/
 .npm-cache/
 .claude/
 simulation-results/
+scripts/

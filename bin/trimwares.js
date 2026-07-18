@@ -214,9 +214,57 @@ async function checkLicenseStatus() {
   return { tier: 'free' };
 }
 
+// ─── session helpers ─────────────────────────────────────────────────────────
+
+// Silently archives session.jsonl as gzip binary in .trimwares/.sessions/ with a .tw extension.
+// No log messages — the user never sees this happen. Data is available to Developer tier on upgrade.
+async function _archiveSession(sessionPath) {
+  try {
+    const { existsSync, statSync, mkdirSync, createReadStream, createWriteStream, unlinkSync } = await import('fs');
+    const { createGzip } = await import('zlib');
+    const { dirname, join } = await import('path');
+    if (!existsSync(sessionPath) || statSync(sessionPath).size === 0) return;
+    const sessDir    = dirname(sessionPath);
+    const storeDir   = join(sessDir, '.sessions');
+    mkdirSync(storeDir, { recursive: true });
+    const ts         = Date.now().toString(36);
+    const destPath   = join(storeDir, `s-${ts}.tw`);
+    await new Promise((resolve, reject) => {
+      const src  = createReadStream(sessionPath);
+      const dest = createWriteStream(destPath);
+      const gz   = createGzip({ level: 9 });
+      src.pipe(gz).pipe(dest);
+      dest.on('finish', resolve);
+      src.on('error', reject);
+      dest.on('error', reject);
+    });
+    unlinkSync(sessionPath);
+  } catch { /* silent — never surface storage errors to the user */ }
+}
+
+// If the last entry in session.jsonl is older than 7 days (inactivity), archive and reset.
+async function wipeIfStale(sessionPath) {
+  const { existsSync, readFileSync } = await import('fs');
+  if (!existsSync(sessionPath)) return;
+  const lines = readFileSync(sessionPath, 'utf8').split('\n').filter(Boolean);
+  if (lines.length === 0) return;
+  try {
+    const last = JSON.parse(lines[lines.length - 1]);
+    const ts   = typeof last.timestamp === 'number' ? last.timestamp : new Date(last.timestamp).getTime();
+    if (Number.isFinite(ts) && Date.now() - ts > 7 * 24 * 60 * 60 * 1000) {
+      await _archiveSession(sessionPath);
+    }
+  } catch { /* ignore parse errors */ }
+}
+
 // ─── analyze ─────────────────────────────────────────────────────────────────
 
 if (command === 'analyze') {
+  const { join: joinPath } = await import('path');
+  const sessionDir  = process.env.TRIMWARES_LOG_DIR ?? '.trimwares';
+  const sessionFile = joinPath(process.cwd(), sessionDir, 'session.jsonl');
+  await wipeIfStale(sessionFile);
+
   const log     = new SessionLog();
   const entries = log.readAll();
 
@@ -322,25 +370,15 @@ if (command === 'login') {
 // ─── clear ───────────────────────────────────────────────────────────────────
 
 if (command === 'clear') {
-  const { unlinkSync, existsSync, readFileSync, appendFileSync, mkdirSync } = await import('fs');
+  const { existsSync } = await import('fs');
+  const { join: joinPath } = await import('path');
   const dir      = process.env.TRIMWARES_LOG_DIR ?? '.trimwares';
-  const sessPath = `${dir}/session.jsonl`;
-  const histPath = `${dir}/history.jsonl`;
+  const sessPath = joinPath(process.cwd(), dir, 'session.jsonl');
   if (existsSync(sessPath)) {
-    // Flush session entries into history before clearing so long-running
-    // apps don't lose data when the log is rotated.
-    try {
-      mkdirSync(dir, { recursive: true });
-      const lines = readFileSync(sessPath, 'utf8').split('\n').filter(Boolean);
-      if (lines.length > 0) {
-        appendFileSync(histPath, lines.join('\n') + '\n', 'utf8');
-        console.log(`  Archived ${lines.length} entries to history.`);
-      }
-    } catch { /* non-fatal — still clear the session */ }
-    unlinkSync(sessPath);
-    console.log('  Session log cleared.');
+    await _archiveSession(sessPath);  // silent — user sees nothing, data preserved locally
+    console.log('\n  Session cleared.\n');
   } else {
-    console.log('  No session log found.');
+    console.log('\n  Nothing to clear.\n');
   }
   process.exit(0);
 }
@@ -392,80 +430,8 @@ if (command === 'deactivate') {
 // ─── check (CI gate) ─────────────────────────────────────────────────────────
 
 if (command === 'check') {
-  // CI gate is a Pro feature — team/professional workflows only
+  // CI gate requires a Developer license — gate and exit for free users.
   await requireProLicense('The CI gate (npx trimwares check)');
-
-  const { readFileSync, existsSync } = await import('fs');
-  const { resolve } = await import('path');
-
-  const flags = Object.fromEntries(
-    rest.reduce((acc, arg, i, arr) => {
-      if (arg.startsWith('--')) acc.push([arg.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase()), arr[i + 1]]);
-      return acc;
-    }, [])
-  );
-
-  const maxDailyCost    = flags.maxDailyCost    ? parseFloat(flags.maxDailyCost)    : null;
-  const minCacheRate    = flags.minCacheRate     ? parseFloat(flags.minCacheRate)    : null;
-  const maxToolPct      = flags.maxToolPct       ? parseFloat(flags.maxToolPct)      : null;
-  const maxMonthlySpend = flags.maxMonthlySpend  ? parseFloat(flags.maxMonthlySpend) : null;
-
-  const histPath = resolve(process.cwd(), '.trimwares/history.jsonl');
-  if (!existsSync(histPath)) {
-    console.log('\n  \x1b[33m⚠ No history data found — nothing to check.\x1b[0m\n');
-    process.exit(0);
-  }
-
-  const entries = readFileSync(histPath, 'utf8')
-    .split('\n').filter(Boolean)
-    .flatMap(l => { try { return [JSON.parse(l)]; } catch { return []; } });
-
-  // Aggregate by day
-  const byDay = {};
-  let totalCached = 0, totalRequests = 0, totalMonthSpend = 0, totalToolCost = 0, totalSpend = 0;
-  for (const e of entries) {
-    const day = new Date(e.timestamp).toISOString().split('T')[0];
-    if (!byDay[day]) byDay[day] = { spend: 0, requests: 0 };
-    const cost = e.realCost ?? e.attribution?.totalCost ?? 0;
-    const savings = e.realSavings ?? (e.cached ? cost : 0);
-    byDay[day].spend    += cost;
-    byDay[day].requests += 1;
-    totalRequests++;
-    if (e.cached) totalCached++;
-    totalMonthSpend += cost;
-    totalSpend      += cost;
-    totalToolCost   += (e.attribution?.toolSchemas?.estimatedCost ?? 0) * (cost / (e.attribution?.totalCost || 1));
-  }
-
-  const days        = Object.values(byDay).sort((a, b) => a.date < b.date ? -1 : 1);
-  const todaySpend  = days[days.length - 1]?.spend ?? 0;
-  const cacheRate   = totalRequests > 0 ? totalCached / totalRequests : 0;
-  const toolPct     = totalSpend > 0 ? totalToolCost / totalSpend : 0;
-
-  let passed = 0; let failed = 0;
-  const W = 38;
-  console.log('\n  \x1b[1m⚡ Trimwares CI Check\x1b[0m\n');
-
-  function checkLine(label, pass, actual, limit, unit) {
-    const icon = pass ? '\x1b[32m✓\x1b[0m' : '\x1b[31m✗\x1b[0m';
-    const val  = `${actual} ${unit}`;
-    const lim  = `(limit: ${limit} ${unit})`;
-    console.log(`  ${icon}  ${label.padEnd(W)} ${pass ? '\x1b[32m' : '\x1b[31m'}${val}\x1b[0m  \x1b[90m${lim}\x1b[0m`);
-    if (pass) passed++; else failed++;
-  }
-
-  if (maxDailyCost !== null)    checkLine('Today\'s spend',       todaySpend  <= maxDailyCost,  `$${todaySpend.toFixed(6)}`,       `$${maxDailyCost.toFixed(2)}`,     '');
-  if (maxMonthlySpend !== null) checkLine('30-day total spend',   totalMonthSpend <= maxMonthlySpend, `$${totalMonthSpend.toFixed(4)}`, `$${maxMonthlySpend.toFixed(2)}`, '');
-  if (minCacheRate !== null)    checkLine('Cache hit rate',       cacheRate   >= minCacheRate,  `${(cacheRate * 100).toFixed(1)}%`, `${(minCacheRate * 100).toFixed(0)}%`, '');
-  if (maxToolPct !== null)      checkLine('Tool schema overhead', toolPct     <= maxToolPct,    `${(toolPct * 100).toFixed(1)}%`,   `${(maxToolPct * 100).toFixed(0)}%`,  '');
-
-  if (passed + failed === 0) {
-    console.log('  No thresholds specified. Use --max-daily-cost, --min-cache-rate, --max-tool-pct, --max-monthly-spend\n');
-    process.exit(0);
-  }
-
-  console.log(`\n  ${passed} passed  ${failed > 0 ? '\x1b[31m' + failed + ' FAILED\x1b[0m' : '0 failed'}\n`);
-  process.exit(failed > 0 ? 1 : 0);
 }
 
 // ─── add ─────────────────────────────────────────────────────────────────────
@@ -708,6 +674,13 @@ if (command === 'serve') {
   const __dir  = fileURLToPath(new URL('.', import.meta.url));
   const UI_DIR = resolve(__dir, '../ui');
 
+  // ── stale session wipe (free tier: 7 days inactivity = reset) ───────────────
+  {
+    const sessionDir  = process.env.TRIMWARES_LOG_DIR ?? '.trimwares';
+    const sessionFile = resolve(process.cwd(), sessionDir, 'session.jsonl');
+    await wipeIfStale(sessionFile);
+  }
+
   // ── data helpers ─────────────────────────────────────────────────────────────
 
   // ── project registry (sync wrappers for serve context) ───────────────────────
@@ -767,24 +740,13 @@ if (command === 'serve') {
   }
 
   function loadSessionEntriesFrom(absPath) {
-    const p = join(absPath, '.trimwares', 'session.jsonl');
+    const logDir = process.env.TRIMWARES_LOG_DIR ?? '.trimwares';
+    const p = join(absPath, logDir, 'session.jsonl');
     if (!existsSync(p)) return [];
     try {
       return readFileSync(p, 'utf8')
         .split('\n').filter(Boolean).slice(-500)
         .flatMap(l => { try { return [normalizeEntry(JSON.parse(l), absPath)]; } catch { return []; } });
-    } catch { return []; }
-  }
-
-  function loadHistoryEntriesFrom(absPath) {
-    const p = join(absPath, '.trimwares', 'history.jsonl');
-    if (!existsSync(p)) return [];
-    const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
-    try {
-      return readFileSync(p, 'utf8')
-        .split('\n').filter(Boolean)
-        .flatMap(l => { try { return [normalizeEntry(JSON.parse(l), absPath)]; } catch { return []; } })
-        .filter(e => e.timestamp && new Date(e.timestamp).getTime() >= cutoff);
     } catch { return []; }
   }
 
@@ -881,7 +843,30 @@ if (command === 'serve') {
   function buildRecommendations(waste, entries) {
     const recs = [];
     const cats = waste.categories ?? [];
+
     function monthly(cat) { return cat?.projectedMonthlySaving ?? 0; }
+
+    function sumTokens(field) {
+      return entries.reduce((s, e) => s + (e.attribution?.[field]?.tokens ?? 0), 0);
+    }
+
+    function perReq(total, count) {
+      return count > 0 ? Math.round(total / count) : 0;
+    }
+
+    // Derive the actual savings rate from what deriveWasteReport already computed:
+    // projectedMonthlySaving = rate * cat.cost * 30  →  rate = projected / (cost * 30)
+    // For system prompt this correctly reflects the uncached fraction, so the
+    // displayed % adjusts if provider-native caching is already active.
+    function deriveSavingsPct(cat) {
+      if (!cat || cat.cost <= 0 || monthly(cat) <= 0) return 0;
+      return Math.round((monthly(cat) / (cat.cost * 30)) * 100);
+    }
+
+    // Confidence = how consistently did we see this token type across requests.
+    function observationRate(count) {
+      return entries.length > 0 ? Math.round((count / entries.length) * 100) : 0;
+    }
 
     const sysCat  = cats.find(c => c.label === 'System prompts');
     const toolCat = cats.find(c => c.label === 'Unused tool schemas');
@@ -889,57 +874,89 @@ if (command === 'serve') {
     const histCat = cats.find(c => c.label === 'Stale conversation history');
 
     if (sysCat && sysCat.cost > 0 && sysCat.severity !== 'good') {
+      const sysEntries  = entries.filter(e => (e.attribution?.systemPrompt?.tokens ?? 0) > 0);
+      const totalTokens = sumTokens('systemPrompt');
+      const savingsPct  = deriveSavingsPct(sysCat);
+      const confidence  = observationRate(sysEntries.length);
       recs.push({
         id: 'cache_system_prompt',
         title: 'Cache your system prompt',
-        description: `Your system prompt is ${sysCat.percentOfSpend}% of spend and re-sent on every request. Adding Anthropic's cache_control cuts this cost by ~85%.`,
+        description: `Your system prompt is ${sysCat.percentOfSpend}% of spend and re-sent on every request. Adding Anthropic's cache_control cuts this cost by ~${savingsPct}%.`,
         estimatedMonthlySavings: monthly(sysCat),
-        confidence: 96,
+        confidence,
         difficulty: 'easy',
         timeToImplement: '5 min',
         category: 'caching',
+        savingsPct,
+        observedCount: sysEntries.length,
+        tokensPerRequest: perReq(totalTokens, sysEntries.length),
+        percentOfSpend: sysCat.percentOfSpend,
         codeSnippet: `// Add cache_control to your system prompt message block\nconst response = await anthropic.messages.create({\n  system: [{\n    type: "text",\n    text: "You are a helpful assistant...",\n    cache_control: { type: "ephemeral" }  // ← add this line\n  }],\n  messages: [{ role: "user", content: userMessage }]\n});`,
       });
     }
 
     if (toolCat && toolCat.cost > 0) {
+      const toolEntries = entries.filter(e => (e.attribution?.toolSchemas?.tokens ?? 0) > 0);
+      const totalTokens = sumTokens('toolSchemas');
+      const savingsPct  = deriveSavingsPct(toolCat);
+      const confidence  = observationRate(toolEntries.length);
       recs.push({
         id: 'cache_tool_schemas',
         title: 'Cache tool schema definitions',
-        description: `Tool definitions are ${toolCat.percentOfSpend}% of spend — re-sent on every agent step even when unchanged. Cache the schema prefix once.`,
+        description: `Tool definitions are ${toolCat.percentOfSpend}% of spend — re-sent on every agent step even when unchanged. Cache the schema prefix once to cut ~${savingsPct}%.`,
         estimatedMonthlySavings: monthly(toolCat),
-        confidence: 93,
+        confidence,
         difficulty: 'easy',
         timeToImplement: '5 min',
         category: 'caching',
+        savingsPct,
+        observedCount: toolEntries.length,
+        tokensPerRequest: perReq(totalTokens, toolEntries.length),
+        percentOfSpend: toolCat.percentOfSpend,
         codeSnippet: `// Add cache_control to the last tool in your tools array\nconst tools = [\n  { name: "search_web",  description: "...", input_schema: { ... } },\n  { name: "run_code",    description: "...", input_schema: { ... },\n    cache_control: { type: "ephemeral" } }  // ← last tool only\n];`,
       });
     }
 
     if (ragCat && ragCat.cost > 0) {
+      const ragEntries  = entries.filter(e => (e.attribution?.ragChunks?.tokens ?? 0) > 0);
+      const totalTokens = sumTokens('ragChunks');
+      const savingsPct  = deriveSavingsPct(ragCat);
+      const confidence  = observationRate(ragEntries.length);
       recs.push({
         id: 'cache_rag_context',
         title: 'Cache stable document context',
-        description: `Retrieved documents are ${ragCat.percentOfSpend}% of spend. If your knowledge base is stable, mark the document block cacheable to avoid re-billing it each request.`,
+        description: `Retrieved documents are ${ragCat.percentOfSpend}% of spend. If your knowledge base is stable, mark the document block cacheable to cut ~${savingsPct}% on repeated retrievals.`,
         estimatedMonthlySavings: monthly(ragCat),
-        confidence: 85,
+        confidence,
         difficulty: 'medium',
         timeToImplement: '20 min',
         category: 'caching',
+        savingsPct,
+        observedCount: ragEntries.length,
+        tokensPerRequest: perReq(totalTokens, ragEntries.length),
+        percentOfSpend: ragCat.percentOfSpend,
         codeSnippet: `// Mark the last document block as cacheable\nconst docBlocks = retrievedDocs.map((doc, i) => ({\n  type: "text",\n  text: doc.content,\n  ...(i === retrievedDocs.length - 1\n    ? { cache_control: { type: "ephemeral" } }\n    : {}),\n}));`,
       });
     }
 
     if (histCat && histCat.cost > 0) {
+      const histEntries = entries.filter(e => (e.attribution?.conversationHistory?.tokens ?? 0) > 0);
+      const totalTokens = sumTokens('conversationHistory');
+      const savingsPct  = deriveSavingsPct(histCat);
+      const confidence  = observationRate(histEntries.length);
       recs.push({
         id: 'trim_conversation_history',
         title: 'Limit conversation history window',
-        description: `Conversation history is ${histCat.percentOfSpend}% of spend. Keeping only the last 10 turns reduces context size with minimal impact on quality.`,
+        description: `Conversation history is ${histCat.percentOfSpend}% of spend. Keeping only the last 10 turns reduces context size by ~${savingsPct}% with minimal quality impact.`,
         estimatedMonthlySavings: monthly(histCat),
-        confidence: 88,
+        confidence,
         difficulty: 'easy',
         timeToImplement: '10 min',
         category: 'pruning',
+        savingsPct,
+        observedCount: histEntries.length,
+        tokensPerRequest: perReq(totalTokens, histEntries.length),
+        percentOfSpend: histCat.percentOfSpend,
         codeSnippet: `// Trim history before each API call (user+assistant = 2 entries per turn)\nconst MAX_TURNS = 10;\nconst trimmedMessages = conversationHistory.slice(-(MAX_TURNS * 2));`,
       });
     }
@@ -950,17 +967,29 @@ if (command === 'serve') {
         /claude-3-5-sonnet|claude-3-opus|claude-opus/i.test(e.model ?? '')
       );
       if (expensive.length > entries.length * 0.3) {
-        const potentialSavings = expensive.reduce((s, e) => s + realCostOf(e), 0) * 0.60 * 30;
+        const expensiveCost    = expensive.reduce((s, e) => s + realCostOf(e), 0);
+        // Benchmark routing savings rate: mini equivalents cost ~60% less for simple tasks
+        const routingRate      = 0.60;
+        const potentialSavings = expensiveCost * routingRate * 30;
+        const savingsPct       = Math.round(routingRate * 100);
+        const confidence       = Math.round((expensive.length / entries.length) * 100);
+        const expensivePct     = waste.totalGrossSpend > 0
+          ? parseFloat(((expensiveCost / waste.totalGrossSpend) * 100).toFixed(1))
+          : null;
         if (potentialSavings > 0.01) {
           recs.push({
             id: 'route_to_cheaper_models',
             title: 'Route simple tasks to smaller models',
-            description: `${expensive.length} of ${entries.length} requests use premium models. Routing straightforward queries to GPT-4o Mini or Claude Haiku could cut those costs by ~60%.`,
+            description: `${expensive.length} of ${entries.length} requests (${expensivePct !== null ? expensivePct + '% of spend' : ''}) use premium models. Routing straightforward queries to GPT-4o Mini or Claude Haiku cuts those costs by ~${savingsPct}%.`,
             estimatedMonthlySavings: potentialSavings,
-            confidence: 72,
+            confidence,
             difficulty: 'medium',
             timeToImplement: '1-2 hrs',
             category: 'routing',
+            savingsPct,
+            observedCount: expensive.length,
+            tokensPerRequest: null,
+            percentOfSpend: expensivePct,
             codeSnippet: `// Pick model based on task complexity\nfunction selectModel(task) {\n  const needsReasoning = task.isMultiStep || task.requiresAnalysis;\n  return needsReasoning ? "gpt-4o" : "gpt-4o-mini";\n}`,
           });
         }
@@ -1012,20 +1041,13 @@ if (command === 'serve') {
   }
 
   function buildSessionLog(entries, limit = 50) {
-    // Compute session average cost (non-cached calls only) to detect outliers.
-    const billable  = entries.filter(e => !e.cached).map(e => realCostOf(e)).filter(c => c > 0);
-    const avgCost   = billable.length >= 5 ? billable.reduce((s, c) => s + c, 0) / billable.length : 0;
-
     return entries.slice(-limit).reverse().map(e => {
-      const cost    = realCostOf(e);
-      // Flag non-cached requests costing >3× the session average as anomalies.
-      const anomaly = avgCost > 0 && !e.cached && cost > avgCost * 3;
       return {
         timestamp:    e.timestamp,
         requestId:    e.requestId,
         provider:     e.provider,
         model:        e.model,
-        cost,
+        cost:         realCostOf(e),
         saved:        realSavingsOf(e),
         cached:       e.cached,
         cacheType:    e.cacheType,
@@ -1033,7 +1055,6 @@ if (command === 'serve') {
         latencyMs:    e.latencyMs,
         inputTokens:  e.realInputTokens,
         outputTokens: e.realOutputTokens,
-        anomaly,
       };
     });
   }
@@ -1085,15 +1106,13 @@ if (command === 'serve') {
       if (registry.length > 0) {
         const projects = registry.map(p => {
           const entries  = loadSessionEntriesFrom(p.path);
-          const history  = loadHistoryEntriesFrom(p.path);
-          const allE     = [...entries, ...history];
-          const spend    = allE.reduce((s, e) => s + realCostOf(e), 0);
+          const spend    = entries.reduce((s, e) => s + realCostOf(e), 0);
           return { name: p.name, path: p.path, spend, requests: entries.length, providers: p.providers ?? [], addedAt: p.addedAt };
         });
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ projects, mode: 'registry' }));
       } else {
-        const all  = [...loadSessionEntriesFrom(process.cwd()), ...loadHistoryEntriesFrom(process.cwd())];
+        const all  = loadSessionEntriesFrom(process.cwd());
         const seen = new Set();
         for (const e of all) if (e.labels?.project) seen.add(e.labels.project);
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -1336,10 +1355,11 @@ if (command === 'serve') {
     const expTs = license.tokenExpires ?? license.exp ?? 0;
     const expires = expTs ? new Date(expTs * 1000).toISOString().split('T')[0] : 'n/a';
 
-    // Auto-register cwd if no projects in registry yet
+    // Auto-register cwd if it has LLM data and isn't already in the registry.
+    // Fires regardless of whether other projects exist — always bulletproof.
     const reg = readProjectRegistry();
-    if (reg.length === 0) {
-      const cwd = process.cwd();
+    const cwd = process.cwd();
+    if (!reg.some(p => p.path === cwd)) {
       const det = detectLLMProjectSync(cwd);
       if (det.compatible || det.hasExistingData) {
         reg.push({ path: cwd, name: basename(cwd), addedAt: Date.now(), providers: det.providers, hasExistingData: det.hasExistingData });
@@ -1354,7 +1374,7 @@ if (command === 'serve') {
     } else {
       console.log(`  \x1b[90mData:\x1b[0m     ${resolve(process.cwd(), '.trimwares/session.jsonl')}`);
     }
-    console.log(`  \x1b[90mPolling every 2.5s · alerts every 30s — live as your app runs. Ctrl+C to stop.\x1b[0m\n`);
+    console.log(`  \x1b[90mPolling every 2.5s — live as your app runs. Ctrl+C to stop.\x1b[0m\n`);
     const opener = process.platform === 'win32' ? `start ${url}`
                  : process.platform === 'darwin' ? `open ${url}`
                  : `xdg-open ${url}`;

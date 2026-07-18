@@ -20,6 +20,7 @@
     "dist/**/*.d.ts",
     "!dist/**/*.map",
     "bin/trimwares.js",
+    "bin/postinstall.js",
     "assets/**",
     "ui/**",
     "README.md",
@@ -43,6 +44,7 @@
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix",
     "type-check": "tsc --noEmit",
+    "postinstall": "node bin/postinstall.js",
     "prepublishOnly": "npm run lint && npm test && npm run build"
   },
   "keywords": [
@@ -71,10 +73,10 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TTHBfo2/trimwares-trace.git"
+    "url": "git+https://github.com/TTHBfo2/LLM-cost-trimmer.git"
   },
   "bugs": {
-    "url": "https://github.com/TTHBfo2/trimwares-trace/issues"
+    "url": "https://github.com/TTHBfo2/LLM-cost-trimmer/issues"
   },
   "homepage": "https://trace.trimwares.com",
   "devDependencies": {
