@@ -187,7 +187,7 @@ The terminal report and dashboard show exactly how your spend breaks down across
 | **Model router** | Routes simple requests to the cheapest capable model in the same provider | Up to 94% per routed call (opt-in) |
 | **Context pruner** | Trims low-relevance history turns from long conversations | Configurable (opt-in) |
 
-**On the numbers:** The 94% model-routing saving is mathematically derived — 13 BPE tokens at GPT-4o pricing ($2.50/MTok) vs GPT-4o-mini ($0.15/MTok). Response cache savings equal your exact repeat-traffic percentage. Benefits are largest for apps with structurally similar requests: support bots, FAQ systems, RAG pipelines. Open-ended or unique queries see little benefit from caching.
+**On the numbers:** The 94% model-routing saving is mathematically derived from the price ratio: GPT-4o ($2.50/MTok) vs GPT-4o-mini ($0.15/MTok) — delta: ($2.50 − $0.15) / $2.50 = 94%. Response cache savings equal your exact repeat-traffic percentage. Benefits are largest for apps with structurally similar requests: support bots, FAQ systems, RAG pipelines. Open-ended or unique queries see little benefit from caching.
 
 **Streaming:** Fully supported. On a cache miss the stream passes through normally while Trimwares collects chunks in the background. On a cache hit the cached response replays as a stream — your code path stays identical.
 

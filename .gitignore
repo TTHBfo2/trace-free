@@ -20,3 +20,10 @@ workers/**/.wrangler/
 .claude/
 simulation-results/
 scripts/
+
+NOTES.md
+CONSULTANT-SUMMARY.md
+VERIFICATION.md
+BENCHMARK-DISCLOSURE.md
+SECURITY-BRIEF.md
+website/
