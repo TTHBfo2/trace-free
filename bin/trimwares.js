@@ -474,7 +474,8 @@ if (command === 'add') {
   console.log(`  \x1b[90mPath:\x1b[0m ${targetPath}`);
   if (providers.length > 0) console.log(`  \x1b[90mLLM providers:\x1b[0m ${providers.join(', ')}`);
   if (hasData) console.log(`  \x1b[32m⚡ Existing session data found\x1b[0m`);
-  console.log(`\n  Start the dashboard: \x1b[33mnpx trimwares serve\x1b[0m\n`);
+  console.log(`\n  Start the dashboard: \x1b[33mnpx trimwares serve\x1b[0m  →  \x1b[36mhttp://localhost:7778\x1b[0m`);
+  console.log(`  \x1b[90mDocs: \x1b[36mhttps://trace.trimwares.com\x1b[0m\n`);
   process.exit(0);
 }
 
@@ -1367,14 +1368,15 @@ if (command === 'serve') {
       }
     }
 
-    console.log(`\n  \x1b[32m⚡ Trimwares Trace\x1b[0m  \x1b[90m(${license.tier} · expires ${expires})\x1b[0m`);
+    const tierLabel = isDeveloper ? `${license.tier} · expires ${expires}` : 'free · local only';
+    console.log(`\n  \x1b[32m⚡ Trimwares Trace\x1b[0m  \x1b[90m(${tierLabel})\x1b[0m`);
     console.log(`  \x1b[90mLocal:\x1b[0m    ${url}`);
-    if (reg.length > 0) {
-      console.log(`  \x1b[90mProjects:\x1b[0m ${reg.length} registered  \x1b[90m(npx trimwares add <path> to add more)\x1b[0m`);
-    } else {
-      console.log(`  \x1b[90mData:\x1b[0m     ${resolve(process.cwd(), '.trimwares/session.jsonl')}`);
+    console.log(`  \x1b[90mNo proxy · no cloud · prompts never leave your machine.\x1b[0m`);
+    console.log(`  \x1b[90mPolling every 2.5s — live as your app runs. Ctrl+C to stop.\x1b[0m`);
+    if (!isDeveloper) {
+      console.log(`  \x1b[90mDeveloper: history · alerts · multi-project · export → \x1b[36mtrace.trimwares.com\x1b[0m`);
     }
-    console.log(`  \x1b[90mPolling every 2.5s — live as your app runs. Ctrl+C to stop.\x1b[0m\n`);
+    console.log('');
     const opener = process.platform === 'win32' ? `start ${url}`
                  : process.platform === 'darwin' ? `open ${url}`
                  : `xdg-open ${url}`;

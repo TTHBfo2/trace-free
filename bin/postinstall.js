@@ -13,8 +13,9 @@ console.log(`       ${y}const openai = trimwares.openai(new OpenAI({ ... }))${r}
 console.log('');
 console.log(`  ${b}2${r}  Run your app, then open the dashboard`);
 console.log(`       ${y}npx trimwares serve${r}  →  ${c}http://localhost:7778${r}`);
-console.log(`       ${dim}Your project registers automatically. Add more from the dashboard.${r}`);
+console.log('');
+console.log(`  ${dim}No proxy · no cloud · no account — your data stays on your machine.${r}`);
 console.log('');
 console.log(`  ${dim}CI / scripting: npx trimwares add <path>  ·  npx trimwares analyze${r}`);
-console.log(`  ${dim}Docs & pricing: ${r}${c}https://trace.trimwares.com${r}`);
+console.log(`  ${dim}Docs: ${r}${c}https://trace.trimwares.com${r}`);
 console.log('');

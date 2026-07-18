@@ -253,13 +253,14 @@ export function renderReport(options: AnalyzeOptions): string {
   }
 
   lines.push(sep);
-  lines.push(dim('  Prompt content is never stored. This report uses token counts only.'));
-  lines.push(dim('  Token counts: BPE tokenizer (cl100k_base) — within ~2% of provider counts.'));
+  lines.push(dim('  No proxy · no cloud · no account — npm install is the entire infrastructure.'));
+  lines.push(dim('  Prompt content is never stored. Token counts only (BPE cl100k_base, ±2%).'));
   lines.push(dim('  Costs: provider list pricing — verify exact amounts against your invoice.'));
   if (!isPro) {
-    lines.push(dim('  Developer: unlimited history + spend alerts + export — trimwares.com/trace'));
+    lines.push(dim('  Developer: unlimited history · spend alerts · multi-project · export'));
+    lines.push(dim('  → trace.trimwares.com'));
   } else {
-    lines.push(dim('  Dashboard: npx trimwares serve · 7-day local dashboard.'));
+    lines.push(dim('  Dashboard: npx trimwares serve  →  http://localhost:7778'));
   }
   lines.push('');
 
