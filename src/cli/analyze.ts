@@ -258,7 +258,7 @@ export function renderReport(options: AnalyzeOptions): string {
   lines.push(dim('  Costs: provider list pricing — verify exact amounts against your invoice.'));
   if (!isPro) {
     lines.push(dim('  Developer: unlimited history · spend alerts · multi-project · export'));
-    lines.push(dim('  → trace.trimwares.com'));
+    lines.push(dim('  → trimwares.com/trace'));
   } else {
     lines.push(dim('  Dashboard: npx trimwares serve  →  http://localhost:7778'));
   }

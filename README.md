@@ -4,7 +4,7 @@
 
 Local-first LLM cost observability. Token attribution by category, a live 7-day dashboard, and built-in optimizations that reduce spend before requests leave your app. No prompts leave your machine. No account required. Works in 30 seconds.
 
-→ **[trace.trimwares.com](https://trace.trimwares.com)**
+→ **[trimwares.com/trace](https://www.trimwares.com/trace)**
 
 ```
   ⚡ Trimwares Trace — Cost Report
@@ -23,7 +23,7 @@ Local-first LLM cost observability. Token attribution by category, a live 7-day 
   Output tokens     ░░░░░░░░░░░░░░░░░░░░░░░░   0%
 
   ────────────────────────────────────────────────────────────
-  Developer: unlimited history + spend alerts + export — trace.trimwares.com
+  Developer: unlimited history + spend alerts + export — trimwares.com/trace
 ```
 
 ---
@@ -105,7 +105,7 @@ Opens at `http://localhost:7778`. Your current project registers automatically �
 
 > **Don't see data yet?** Make sure your app has made at least one LLM call after wrapping the client. The dashboard polls every 2.5 s — data appears within seconds of your first request.
 
-→ **[trace.trimwares.com](https://trace.trimwares.com)** — full docs and more examples
+→ **[trimwares.com/trace](https://www.trimwares.com/trace)** — full docs and more examples
 
 ---
 
@@ -139,7 +139,7 @@ No account. No expiry. No data leaving your machine.
 | Works offline, air-gapped, and in CI | ✓ |
 | Apache 2.0 license | ✓ |
 
-→ **[See everything it can do at trace.trimwares.com](https://trace.trimwares.com)**
+→ **[See everything it can do at trimwares.com/trace](https://www.trimwares.com/trace)**
 
 ---
 
@@ -162,7 +162,7 @@ The Developer tier is in active development. Here's what's coming:
 
 [Email us at hello@trimwares.com](mailto:hello@trimwares.com?subject=Developer%20tier%20interest) — we read every message and are actively shaping the roadmap based on what developers actually need.
 
-→ **[Follow progress and get notified at trace.trimwares.com](https://trace.trimwares.com)**
+→ **[Follow progress and get notified at trimwares.com/trace](https://www.trimwares.com/trace)**
 
 ---
 
@@ -197,7 +197,7 @@ The terminal report and dashboard show exactly how your spend breaks down across
 
 **Streaming:** Fully supported. On a cache miss the stream passes through normally while Trimwares collects chunks in the background. On a cache hit the cached response replays as a stream — your code path stays identical.
 
-→ **[trace.trimwares.com](https://trace.trimwares.com)** — benchmarks and methodology
+→ **[trimwares.com/trace](https://www.trimwares.com/trace)** — benchmarks and methodology
 
 ---
 
@@ -278,7 +278,7 @@ Never the text. Cache keys are SHA-256 hashes — the original content is not re
 | Local dashboard | No | No | **Yes** |
 | Free tier with real features | No | Yes | **Yes** |
 
-→ **[trace.trimwares.com](https://trace.trimwares.com)** — full comparison
+→ **[trimwares.com/trace](https://www.trimwares.com/trace)** — full comparison
 
 ---
 
@@ -312,11 +312,11 @@ const openai = trimwares.openai(new OpenAI(), {
 npx trimwares serve
 ```
 
-Opens at `http://localhost:7778`. Auto-registers your current project. Add additional projects from the dashboard at any time using the built-in file browser — no CLI needed.
+Opens at `http://localhost:7778`. Auto-registers your current project. To add additional projects, run `npx trimwares add <path>` from each project directory.
 
 The dashboard polls every 2.5 seconds, so it stays live while your app runs. Shows the last 7 days of data for free users.
 
-→ **[trace.trimwares.com](https://trace.trimwares.com)** — screenshots and roadmap
+→ **[trimwares.com/trace](https://www.trimwares.com/trace)** — screenshots and roadmap
 
 ---
 
@@ -325,4 +325,4 @@ The dashboard polls every 2.5 seconds, so it stays live while your app runs. Sho
 Apache 2.0 — free to use, modify, and distribute.
 
 Questions, feedback, or want early access to the Developer tier?
-**[hello@trimwares.com](mailto:hello@trimwares.com)** · **[trace.trimwares.com](https://trace.trimwares.com)**
+**[hello@trimwares.com](mailto:hello@trimwares.com)** · **[trimwares.com/trace](https://www.trimwares.com/trace)**

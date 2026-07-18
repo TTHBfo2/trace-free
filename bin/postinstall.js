@@ -17,5 +17,5 @@ console.log('');
 console.log(`  ${dim}No proxy · no cloud · no account — your data stays on your machine.${r}`);
 console.log('');
 console.log(`  ${dim}CI / scripting: npx trimwares add <path>  ·  npx trimwares analyze${r}`);
-console.log(`  ${dim}Docs: ${r}${c}https://trace.trimwares.com${r}`);
+console.log(`  ${dim}Docs: ${r}${c}https://www.trimwares.com/trace${r}`);
 console.log('');

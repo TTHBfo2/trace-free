@@ -77,7 +77,7 @@
   "bugs": {
     "url": "https://github.com/TTHBfo2/LLM-cost-trimmer/issues"
   },
-  "homepage": "https://trace.trimwares.com",
+  "homepage": "https://www.trimwares.com/trace",
   "devDependencies": {
     "@anthropic-ai/sdk": "^0.104.2",
     "@rollup/plugin-node-resolve": "^15.2.3",
