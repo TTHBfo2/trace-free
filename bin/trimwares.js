@@ -13,7 +13,7 @@ const [,, command = 'analyze', ...rest] = process.argv;
 
 // ─── License verification ─────────────────────────────────────────────────────
 
-const PUBLIC_KEY_B64  = 'MCowBQYDK2VwAyEA+WiFm3fBMP/eHXnHqNN2aEXTlMbJLq51We0DcAN2nL8=';
+const PUBLIC_KEY_B64  = 'MCowBQYDK2VwAyEAcc7FO+gYz0ukB1iw3IDZK5i3LugTGmFXMBiIRSYTiIw=';
 const WORKER_URL      = process.env.TRIMWARES_WORKER_URL ?? 'https://license.trimwares.com';
 const TOKEN_GRACE_SEC = 7 * 86400; // 7 days grace after token expiry
 
