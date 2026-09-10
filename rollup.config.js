@@ -21,7 +21,7 @@ export default [
         rootDir: 'src'
       })
     ],
-    external: ['openai', '@anthropic-ai/sdk', '@google/generative-ai', 'crypto', 'zlib', 'tiktoken', '@xenova/transformers']
+    external: ['openai', '@anthropic-ai/sdk', '@google/generative-ai', 'crypto', 'zlib', 'tiktoken', '@huggingface/transformers']
   },
 
   // CJS build — .cjs extension required when package.json has "type": "module"
@@ -42,6 +42,6 @@ export default [
         declarationMap: false
       })
     ],
-    external: ['openai', '@anthropic-ai/sdk', '@google/generative-ai', 'crypto', 'zlib', 'tiktoken', '@xenova/transformers']
+    external: ['openai', '@anthropic-ai/sdk', '@google/generative-ai', 'crypto', 'zlib', 'tiktoken', '@huggingface/transformers']
   }
 ];

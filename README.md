@@ -312,7 +312,7 @@ const openai = trimwares.openai(new OpenAI(), {
 });
 ```
 
-**Semantic cache note:** Uses `all-MiniLM-L6-v2` local embeddings via the optional peer package `@xenova/transformers` (~23 MB model, downloaded once). This is **not** installed by `npm install @trimwares/trace` — the core package stays at 2 dependencies and 0 vulnerabilities. To enable semantic caching, run `npm install @xenova/transformers` yourself, then set `cache.semantic.enabled: true`. Without it, semantic caching silently falls back to a lighter trigram-similarity match instead of erroring. Disabled by default anyway because stress testing showed false positives on structurally similar but semantically different queries (e.g. "capital of France?" matching "capital of Germany?") — enable only for workloads with near-identical repeated queries.
+**Semantic cache note:** Uses `all-MiniLM-L6-v2` local embeddings via the optional peer package `@huggingface/transformers` (~23 MB model, downloaded once). This is **not** installed by `npm install @trimwares/trace` — the core package stays at 2 dependencies and 0 vulnerabilities. To enable semantic caching, run `npm install @huggingface/transformers` yourself, then set `cache.semantic.enabled: true`. Without it, semantic caching silently falls back to a lighter trigram-similarity match instead of erroring. Disabled by default anyway because stress testing showed false positives on structurally similar but semantically different queries (e.g. "capital of France?" matching "capital of Germany?") — enable only for workloads with near-identical repeated queries.
 
 ---
 

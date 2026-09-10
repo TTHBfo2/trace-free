@@ -1,12 +1,18 @@
 import { LLMRequest, LLMResponse, CacheStats } from '../types/index.js';
 
 // Semantic similarity cache.
-// Uses all-MiniLM-L6-v2 sentence embeddings via @xenova/transformers when available
-// (quantized ONNX, ~23MB, downloaded once and cached on disk — no API call, no internet
+// Uses all-MiniLM-L6-v2 sentence embeddings via @huggingface/transformers when available
+// (q8 quantized ONNX, ~23MB, downloaded once and cached on disk — no API call, no internet
 // after first download). Falls back to character trigram TF-IDF when not installed.
 //
+// @huggingface/transformers is the actively-maintained successor to @xenova/transformers
+// (same original author, moved to the Hugging Face npm scope) — used here specifically
+// because it resolves a current, non-vulnerable protobufjs via its onnxruntime-web
+// dependency, where @xenova/transformers (abandoned at 2.17.2) is pinned to an old
+// onnxruntime-web that drags in a protobufjs version with a critical CVE.
+//
 // Disabled by default — enable with: cache: { semantic: { enabled: true } }
-// Install embeddings support: npm install @xenova/transformers
+// Install embeddings support: npm install @huggingface/transformers
 
 interface SemanticEntry {
   response: LLMResponse;
@@ -30,10 +36,13 @@ let embedderPromise: Promise<EmbedderFn | null> | null = null;
 
 async function loadEmbedder(): Promise<EmbedderFn | null> {
   try {
-    // Dynamic import keeps the package loadable even when @xenova/transformers is absent.
-    const { pipeline } = await import('@xenova/transformers');
-    // quantized: true → int8 ONNX, ~23MB vs ~90MB for f32; minimal quality loss for similarity
-    const pipe = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', { quantized: true });
+    // Dynamic import keeps the package loadable even when @huggingface/transformers is absent.
+    const { pipeline } = await import('@huggingface/transformers');
+    // dtype: 'q8' → 8-bit quantized ONNX, ~23MB vs ~90MB for fp32; minimal quality loss for
+    // similarity. Replaces the old `quantized: true` boolean — @huggingface/transformers'
+    // pipeline() dropped that option in favor of an explicit dtype string (same behavior,
+    // renamed API; this is not a downgrade in quantization, just the new option name).
+    const pipe = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', { dtype: 'q8' });
     return async (text: string): Promise<Float32Array> => {
       const output = await (pipe as (t: string, opts: Record<string, unknown>) => Promise<{ data: ArrayLike<number> }>)(
         text, { pooling: 'mean', normalize: true },
@@ -41,7 +50,7 @@ async function loadEmbedder(): Promise<EmbedderFn | null> {
       return new Float32Array(output.data);
     };
   } catch {
-    // @xenova/transformers not installed or WASM failed — trigram fallback is used silently
+    // @huggingface/transformers not installed or WASM failed — trigram fallback is used silently
     return null;
   }
 }
