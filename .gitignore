@@ -19,7 +19,8 @@ workers/**/.wrangler/
 .npm-cache/
 .claude/
 simulation-results/
-scripts/
+scripts/*
+!scripts/verify-embeddings.mjs
 
 NOTES.md
 CONSULTANT-SUMMARY.md

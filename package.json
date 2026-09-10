@@ -40,6 +40,7 @@
     "lint:fix": "eslint src --ext .ts --fix",
     "type-check": "tsc --noEmit",
     "postinstall": "node bin/postinstall.js",
+    "verify:embeddings": "node scripts/verify-embeddings.mjs",
     "prepublishOnly": "npm run lint && npm test && npm run build"
   },
   "keywords": [
