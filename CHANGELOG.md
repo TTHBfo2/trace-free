@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **`@xenova/transformers` is no longer a hard dependency.** It was listed under `dependencies`, so every `npm install @trimwares/trace` pulled in its full transitive tree (`onnxruntime` → `protobufjs`, `sharp`) — 82 packages and, at last check, 6 vulnerabilities including one critical (`protobufjs`, no fix available), even though the semantic cache it powers is disabled by default and the code already loads it via a dynamic `import()` wrapped in try/catch with a trigram-similarity fallback. Moved it to `devDependencies` (so this repo's own `tsc` build still type-checks the dynamic import) and declared it as an optional peer dependency instead — the same pattern already used for `openai`/`@anthropic-ai/sdk`. A fresh `npm install @trimwares/trace` now adds 2 packages (itself + `tiktoken`) with 0 vulnerabilities, confirmed via a real `npm pack` + clean-directory install, not just a config read. Semantic caching still works exactly as documented for anyone who explicitly wants it — run `npm install @xenova/transformers` yourself, then set `cache.semantic.enabled: true`. See the Semantic cache note under Configuration in the README.
+
 ## [1.5.3] — 2026-07-19
 
 ### Changed
