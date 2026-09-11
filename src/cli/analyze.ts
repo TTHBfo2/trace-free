@@ -52,7 +52,8 @@ export interface AnalyzeOptions {
 export function renderReport(options: AnalyzeOptions): string {
   const { entries, isPro = false } = options;
   if (entries.length === 0) {
-    return `\n${yellow('No session data found.')} Run your app with Trimwares Trace first.\n`;
+    return `\n${yellow('No session data found.')} Run your app with Trimwares Trace first.\n` +
+      `${gray('Built by one person — tell me what Trace got wrong: hello@trimwares.com')}\n`;
   }
 
   const lines: string[] = [];

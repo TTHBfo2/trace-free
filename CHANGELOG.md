@@ -1,6 +1,9 @@
 # Changelog
 
-## [Unreleased]
+## [1.5.4] — 2026-09-11
+
+### Added
+- **Founder contact line** in the postinstall banner and the `npx trimwares analyze` empty state: "Built by one person — tell me what Trace got wrong: hello@trimwares.com". Same line is going into the free dashboard's Developer card.
 
 ### Fixed
 - **The optional embeddings package is no longer a hard dependency, and is now the actively-maintained one.** `@xenova/transformers` was listed under `dependencies`, so every `npm install @trimwares/trace` pulled in its full transitive tree (`onnxruntime` → `protobufjs`, `sharp`) — 82 packages and, at last check, 6 vulnerabilities including one critical (`protobufjs`, arbitrary code execution), even though the semantic cache it powers is disabled by default and the code already loads it via a dynamic `import()` wrapped in try/catch with a trigram-similarity fallback. A fresh `npm install @trimwares/trace` now adds 2 packages (itself + `tiktoken`) with 0 vulnerabilities, confirmed via a real `npm pack` + clean-directory install, not just a config read.

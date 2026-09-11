@@ -1,6 +1,6 @@
 {
   "name": "@trimwares/trace",
-  "version": "1.5.3",
+  "version": "1.5.4",
   "type": "module",
   "description": "Local-first LLM cost tracker — no proxy, no cloud, no account. npm install is the entire infrastructure. Token attribution, optimization recommendations, and a 7-day local dashboard. OpenAI · Anthropic · Groq · Gemini · Ollama.",
   "main": "dist/index.cjs",
