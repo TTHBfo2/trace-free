@@ -1,4 +1,5 @@
 import { clsx } from 'clsx';
+import { providerLabel } from '@/lib/format';
 
 interface LogEntry {
   timestamp:   number;
@@ -111,7 +112,7 @@ export function SessionLogTable({ entries }: Props) {
                   <td className="py-3 px-4 text-[#9a9a9a] font-mono whitespace-nowrap">
                     {formatTime(e.timestamp)}
                   </td>
-                  <td className="py-3 px-4 text-[#9a9a9a] capitalize">{e.provider}</td>
+                  <td className="py-3 px-4 text-[#9a9a9a]">{providerLabel(e.provider)}</td>
                   <td className="py-3 px-4 text-[#9a9a9a] font-mono truncate max-w-[160px]">{e.model}</td>
                   <td className="py-3 px-4 text-right text-[#9a9a9a] font-mono whitespace-nowrap">
                     {e.inputTokens.toLocaleString()} / {e.outputTokens.toLocaleString()}

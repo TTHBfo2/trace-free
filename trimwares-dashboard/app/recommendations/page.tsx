@@ -4,14 +4,8 @@ import { useState } from 'react';
 import { useRecommendationsData, Recommendation } from '@/hooks/useRecommendationsData';
 import { ChevronRight, Loader2, Lightbulb, Lock } from 'lucide-react';
 import { clsx } from 'clsx';
+import { usd } from '@/lib/format';
 
-function usd(n: number): string {
-  if (n === 0)    return '$0.00';
-  if (n >= 1000)  return `$${(n / 1000).toFixed(1)}K`;
-  if (n >= 1)     return `$${n.toFixed(2)}`;
-  if (n >= 0.001) return `$${n.toFixed(4)}`;
-  return `$${n.toFixed(6)}`;
-}
 
 function confidenceLabel(pct: number): string {
   if (pct >= 95) return 'Seen on every request';
@@ -118,7 +112,7 @@ function HeroCard({ rec }: { rec: Recommendation }) {
                     rel="noopener noreferrer"
                     className="text-[11px] text-green-500 border border-[#1a3820] px-2.5 py-1 rounded-md hover:border-[#2a5030] hover:text-green-400 transition whitespace-nowrap ml-3"
                   >
-                    Unlock Developer →
+                    View Developer pricing →
                   </a>
                 </div>
               </div>

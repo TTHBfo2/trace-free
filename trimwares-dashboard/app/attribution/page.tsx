@@ -6,15 +6,10 @@ import { SessionLogTable }  from '@/components/attribution/SessionLogTable';
 import { AlertCircle, Loader2, Lock } from 'lucide-react';
 import { clsx } from 'clsx';
 import type { DashboardApiResponse } from '@/hooks/useDashboardData';
+import { usd } from '@/lib/format';
 
 type Scenarios = NonNullable<DashboardApiResponse['attribution']['scenarios']>;
 
-function usd(n: number): string {
-  if (n === 0)    return '$0.00';
-  if (n >= 1)     return `$${n.toFixed(3)}`;
-  if (n >= 0.001) return `$${n.toFixed(4)}`;
-  return `$${n.toFixed(5)}`;
-}
 
 function cacheRateLabel(rate: number): { text: string; cls: string } {
   if (rate >= 50) return { text: 'Highly optimized', cls: 'text-green-500 bg-[#0b1c0e] border-[#1a3820]' };

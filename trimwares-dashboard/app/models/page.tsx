@@ -3,24 +3,18 @@
 import { useModelsData, ModelRow } from '@/hooks/useModelsData';
 import { Cpu, Loader2, Lock, TrendingUp } from 'lucide-react';
 import { clsx } from 'clsx';
+import { usd, providerLabel } from '@/lib/format';
 
 // Direct checkout — same destination as the Overview and Recommendations
 // cards. "Get Developer" is reserved for links that actually go to checkout;
 // links to the pricing page say "View Developer pricing" instead.
 const DEV_CTA_URL = 'https://www.creem.io/payment/prod_7kmfXSlzBxzWMl3zfjc9wk';
 
-function usd(n: number): string {
-  if (n === 0)    return '$0.00';
-  if (n >= 1)     return `$${n.toFixed(3)}`;
-  if (n >= 0.01)  return `$${n.toFixed(4)}`;
-  if (n > 0)      return `$${n.toFixed(5)}`;
-  return '$0.00';
-}
 
 const PROVIDER_COLOR: Record<string, string> = {
   openai:    '#10b981',
   anthropic: '#a78bfa',
-  google:    '#60a5fa',
+  gemini:    '#60a5fa',
   groq:      '#f59e0b',
   ollama:    '#94a3b8',
 };
@@ -30,9 +24,9 @@ function providerBadge(provider: string) {
   return (
     <span
       style={{ color, border: `1px solid ${color}33`, background: `${color}11` }}
-      className="inline-block text-[10px] font-medium px-2 py-0.5 rounded-full capitalize flex-shrink-0"
+      className="inline-block text-[10px] font-medium px-2 py-0.5 rounded-full flex-shrink-0"
     >
-      {provider}
+      {providerLabel(provider)}
     </span>
   );
 }

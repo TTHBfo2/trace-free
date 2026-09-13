@@ -3,14 +3,8 @@
 import { useDashboardData, SetupDetect } from '@/hooks/useDashboardData';
 import { clsx } from 'clsx';
 import { TrendingDown, Zap, Loader2, Check, Circle, Lock } from 'lucide-react';
+import { usd } from '@/lib/format';
 
-function usd(n: number): string {
-  if (n === 0)    return '$0.00';
-  if (n >= 1000)  return `$${(n / 1000).toFixed(1)}K`;
-  if (n >= 1)     return `$${n.toFixed(2)}`;
-  if (n >= 0.001) return `$${n.toFixed(4)}`;
-  return `$${n.toFixed(6)}`;
-}
 
 export default function OverviewPage() {
   const { data, loading, error } = useDashboardData();
