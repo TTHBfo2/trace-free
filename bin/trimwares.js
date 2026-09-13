@@ -673,7 +673,7 @@ if (command === 'serve') {
   };
 
   const { createServer }                          = await import('http');
-  const { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } = await import('fs');
+  const { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, statSync } = await import('fs');
   const { join, resolve, extname, basename }      = await import('path');
   const { homedir }                               = await import('os');
   const { fileURLToPath }                         = await import('url');
@@ -762,9 +762,19 @@ if (command === 'serve') {
   // ── multi-project-aware loaders ───────────────────────────────────────────────
 
   function loadSessionEntries(projectPath) {
-    const registry = readProjectRegistry();
-    if (projectPath && projectPath !== 'all') return loadSessionEntriesFrom(projectPath);
-    if (registry.length > 0) return registry.flatMap(p => loadSessionEntriesFrom(p.path));
+    // Explicit registry-wide aggregate — only when a caller asks for it.
+    if (projectPath === 'all') {
+      const registry = readProjectRegistry();
+      if (registry.length > 0) return registry.flatMap(p => loadSessionEntriesFrom(p.path));
+    }
+    if (projectPath) return loadSessionEntriesFrom(projectPath);
+    // Default = the project `serve` was started in. The free dashboard is
+    // single-project by design (its sidebar shows one "current project"
+    // chip), so this must NOT aggregate the registry. It used to: because
+    // `serve` auto-registers every directory it's run from, a free user who
+    // had ever served from two projects saw both projects' spend summed on
+    // every page, labeled as one project — and `npx trimwares clear` in the
+    // current project left the other project's entries on screen.
     return loadSessionEntriesFrom(process.cwd());
   }
 
@@ -1079,6 +1089,15 @@ if (command === 'serve') {
     '.ico':  'image/x-icon',
     '.png':  'image/png',
     '.woff2':'font/woff2',
+    // Next.js App Router's static export writes each route's RSC/Flight
+    // payload as a sibling `.txt` (index.txt, __next._tree.txt, ...),
+    // fetched by next/link for soft client-side navigation. Next's client
+    // accepts it only if the Content-Type is exactly "text/x-component";
+    // anything else and it silently falls back to a full hard navigation on
+    // every click — the free dashboard shipped that way through 1.5.3
+    // (every sidebar click reloaded the whole page). Same fix as the
+    // Developer server.
+    '.txt':  'text/x-component',
   };
 
   // ── HTTP server ───────────────────────────────────────────────────────────────
@@ -1318,6 +1337,40 @@ if (command === 'serve') {
       return;
     }
 
+    // ── Clear current session ───────────────────────────────────────────────────
+    // Backs the dashboard's Settings → "Clear session" button. Identical
+    // behavior to `npx trimwares clear`: the session log is archived
+    // (gzipped into .trimwares/.sessions/), never destroyed. This route did
+    // not exist before 1.5.4 — the button POSTed here, the request fell
+    // through to the index.html fallback with a 200, and the UI showed
+    // "Cleared" without clearing anything.
+    if (req.method === 'POST' && urlPath === '/api/clear') {
+      const base     = (projectPath && projectPath !== 'all') ? projectPath : process.cwd();
+      const logDir   = process.env.TRIMWARES_LOG_DIR ?? '.trimwares';
+      const sessPath = join(base, logDir, 'session.jsonl');
+      const existed  = existsSync(sessPath) && statSync(sessPath).size > 0;
+      _archiveSession(sessPath)
+        .then(() => {
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+          res.end(JSON.stringify({ ok: true, cleared: existed }));
+        })
+        .catch((err) => {
+          res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+          res.end(JSON.stringify({ ok: false, error: String(err?.message ?? err) }));
+        });
+      return;
+    }
+
+    // ── Unknown /api/* → JSON 404, never the dashboard HTML fallback ───────────
+    // Without this, a typo'd or not-yet-implemented API path returned the
+    // dashboard's index.html with a 200, and any fetch() that only checked
+    // response.ok treated that as success.
+    if (urlPath.startsWith('/api/')) {
+      res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ ok: false, error: `No such API route: ${req.method} ${urlPath}` }));
+      return;
+    }
+
     if (!existsSync(UI_DIR)) {
       res.writeHead(503, { 'Content-Type': 'text/plain' });
       res.end('Dashboard UI not bundled. Run: npm run build in trimwares-dashboard.');
@@ -1331,14 +1384,47 @@ if (command === 'serve') {
       const idx = join(UI_DIR, urlPath.replace(/\/?$/, ''), 'index.html');
       filePath = existsSync(idx) ? idx : join(UI_DIR, 'index.html');
     }
-    if (!existsSync(filePath)) filePath = join(UI_DIR, 'index.html');
+    // Next 16's client prefetches per-segment RSC payloads at
+    //   /<route>/__next.<segment>.__PAGE__.txt        (dots)
+    // while `output: 'export'` writes them to disk as
+    //   /<route>/__next.<segment>/__PAGE__.txt        (nested dir)
+    // On a dumb static host that's a 404 per navigation and the client
+    // degrades to the full payload. We're not a dumb host — map it.
+    if (!existsSync(filePath)) {
+      const m = basename(filePath).match(/^(__next\..+)\.(__PAGE__\.txt)$/);
+      if (m) {
+        const nested = join(filePath, '..', m[1], m[2]);
+        if (existsSync(nested)) filePath = nested;
+      }
+    }
+    // A missing file WITH an extension (a JS chunk, CSS, image) must 404,
+    // not fall back to index.html. Previously it did fall back, which meant
+    // a browser holding a cached index.html from a previous build would
+    // request the old content-hashed chunk, receive HTML with a 200, fail
+    // to parse it as JavaScript, and never hydrate — the page rendered as
+    // an empty shell (no data, no CTAs) until a hard refresh. Every
+    // upgrade of the package regenerates those hashes, so this hit real
+    // users on every version bump.
+    if (!existsSync(filePath)) {
+      res.writeHead(404, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
+      res.end('Not found');
+      return;
+    }
 
     try {
       const content = readFileSync(filePath);
-      res.writeHead(200, { 'Content-Type': MIME[extname(filePath)] ?? 'application/octet-stream' });
+      const ext = extname(filePath);
+      // HTML is tiny and is the thing that references the current chunk
+      // hashes — always revalidate it so a plain reload picks up a new
+      // build. Content-hashed assets under /_next/static/ can be cached
+      // forever; a new build means a new URL. Anything else: revalidate.
+      const cache = ext === '.html'                         ? 'no-cache'
+                  : urlPath.startsWith('/_next/static/')    ? 'public, max-age=31536000, immutable'
+                  :                                           'no-cache';
+      res.writeHead(200, { 'Content-Type': MIME[ext] ?? 'application/octet-stream', 'Cache-Control': cache });
       res.end(content);
     } catch {
-      res.writeHead(404);
+      res.writeHead(404, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
       res.end('Not found');
     }
   }

@@ -31,7 +31,7 @@
   },
   "scripts": {
     "build": "tsc && rollup -c",
-    "build:ui": "cd ../trimwares-dashboard && npm run build && cd ../llm-cost-trimmer && node -e \"const {rmSync,cpSync}=require('fs');rmSync('ui',{recursive:true,force:true});cpSync('../trimwares-dashboard/out','ui',{recursive:true,dereference:true});\"",
+    "build:ui": "npm --prefix trimwares-dashboard run build && node -e \"const {rmSync,cpSync}=require('fs');rmSync('ui',{recursive:true,force:true});cpSync('trimwares-dashboard/out','ui',{recursive:true,dereference:true});\"",
     "dev": "tsc --watch",
     "test": "node --experimental-vm-modules node_modules/jest-cli/bin/jest.js --config jest.config.cjs --passWithNoTests",
     "test:watch": "node --experimental-vm-modules node_modules/jest-cli/bin/jest.js --config jest.config.cjs --watch",
@@ -41,7 +41,8 @@
     "type-check": "tsc --noEmit",
     "postinstall": "node bin/postinstall.js",
     "verify:embeddings": "node scripts/verify-embeddings.mjs",
-    "prepublishOnly": "npm run lint && npm test && npm run build"
+    "release:gate": "node scripts/release-gate.mjs",
+    "prepublishOnly": "npm run lint && npm test && npm run build && npm run build:ui && npm run release:gate"
   },
   "keywords": [
     "llm",

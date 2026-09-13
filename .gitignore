@@ -21,6 +21,7 @@ workers/**/.wrangler/
 simulation-results/
 scripts/*
 !scripts/verify-embeddings.mjs
+!scripts/release-gate.mjs
 
 NOTES.md
 CONSULTANT-SUMMARY.md
