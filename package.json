@@ -42,7 +42,8 @@
     "postinstall": "node bin/postinstall.js",
     "verify:embeddings": "node scripts/verify-embeddings.mjs",
     "release:gate": "node scripts/release-gate.mjs",
-    "prepublishOnly": "npm run lint && npm test && npm run build && npm run build:ui && npm run release:gate"
+    "prepublishOnly": "npm run lint && npm test && npm run build && npm run build:ui && npm run test:e2e && npm run release:gate",
+    "test:e2e": "playwright test"
   },
   "keywords": [
     "llm",
@@ -82,13 +83,14 @@
   "homepage": "https://www.trimwares.com/trace",
   "devDependencies": {
     "@anthropic-ai/sdk": "^0.104.2",
+    "@huggingface/transformers": "^4.2.0",
+    "@playwright/test": "^1.63.0",
     "@rollup/plugin-node-resolve": "^15.2.3",
     "@rollup/plugin-typescript": "^11.1.6",
     "@types/jest": "^29.5.8",
     "@types/node": "^20.10.0",
     "@typescript-eslint/eslint-plugin": "^6.13.1",
     "@typescript-eslint/parser": "^6.13.1",
-    "@huggingface/transformers": "^4.2.0",
     "eslint": "^8.54.0",
     "jest": "^29.7.0",
     "openai": "^6.41.0",
@@ -100,8 +102,8 @@
   },
   "peerDependencies": {
     "@anthropic-ai/sdk": ">=0.20.0",
-    "openai": ">=4.0.0",
-    "@huggingface/transformers": "^4.2.0"
+    "@huggingface/transformers": "^4.2.0",
+    "openai": ">=4.0.0"
   },
   "peerDependenciesMeta": {
     "openai": {

@@ -26,8 +26,8 @@ const config: Config = {
         // (Developer's config uses success/warning/danger for this reason).
       },
       fontFamily: {
-        sans: ['Inter', 'system-ui', 'sans-serif'],
-        mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
+        sans: ['var(--font-sans)', 'Inter', 'system-ui', 'sans-serif'],
+        mono: ['var(--font-mono)', 'JetBrains Mono', 'Fira Code', 'monospace'],
       },
     },
   },

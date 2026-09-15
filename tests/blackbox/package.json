@@ -1,0 +1,13 @@
+{
+  "name": "trimwares-blackbox-test",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Black-box install test — simulates a real third-party npm install",
+  "private": true,
+  "scripts": {
+    "test": "node test.mjs"
+  },
+  "dependencies": {
+    "@trimwares/trace": "file:../../trimwares-trace-1.5.1.tgz"
+  }
+}

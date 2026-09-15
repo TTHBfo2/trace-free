@@ -1,7 +1,3 @@
-/* @import must precede every other rule (CSS spec; enforced by Next 16's CSS
-   pipeline — the build fails otherwise). Keep this above the @tailwind lines. */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
-
 
 @tailwind base;
 @tailwind components;

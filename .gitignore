@@ -10,7 +10,6 @@ coverage/
 .trimwares-test-*/
 .trimwares-verify-*/
 
-tests/
 
 workers/**/.credentials
 workers/**/.dev.vars
@@ -29,3 +28,7 @@ VERIFICATION.md
 BENCHMARK-DISCLOSURE.md
 SECURITY-BRIEF.md
 website/
+
+# Playwright artifacts
+playwright-report/
+test-results/
