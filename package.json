@@ -30,7 +30,7 @@
     "trimwares": "bin/trimwares.js"
   },
   "scripts": {
-    "build": "tsc && rollup -c",
+    "build": "tsc && node scripts/build.mjs",
     "build:ui": "npm --prefix trimwares-dashboard run build && node -e \"const {rmSync,cpSync}=require('fs');rmSync('ui',{recursive:true,force:true});cpSync('trimwares-dashboard/out','ui',{recursive:true,dereference:true});\"",
     "dev": "tsc --watch",
     "test": "node --experimental-vm-modules node_modules/jest-cli/bin/jest.js --config jest.config.cjs --passWithNoTests",

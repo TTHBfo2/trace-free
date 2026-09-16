@@ -21,6 +21,7 @@ simulation-results/
 scripts/*
 !scripts/verify-embeddings.mjs
 !scripts/release-gate.mjs
+!scripts/build.mjs
 
 NOTES.md
 CONSULTANT-SUMMARY.md
