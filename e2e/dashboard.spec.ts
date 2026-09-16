@@ -96,6 +96,26 @@ test.describe('free dashboard', () => {
     for (const m of dollarsOverOne) expect(m, 'two decimals for amounts ≥ $1').toMatch(/^\$\d+\.\d{2}$/);
   });
 
+  test('every request across every page goes to the local server only — nothing leaves the machine', async ({ page, baseURL }) => {
+    // The product promise. Until 1.5.4 the dashboard @imported Inter and
+    // JetBrains Mono from fonts.googleapis.com on every load — a third-party
+    // request from a "nothing leaves your machine" tool, and a broken layout
+    // offline. Fonts are now bundled at build time; this asserts no request
+    // of any kind — script, style, font, image, XHR, prefetch — goes anywhere
+    // but the dashboard server itself.
+    const localHost = new URL(baseURL!).host;
+    const external: string[] = [];
+    page.on('request', r => { const h = new URL(r.url()).host; if (h !== localHost) external.push(r.url()); });
+    for (const path of ['/', '/recommendations', '/attribution', '/models', '/settings']) {
+      await open(page, path);
+    }
+    // Let any late-loading assets (fonts, prefetches) fire before judging.
+    await page.waitForTimeout(1500);
+    expect(external, 'requests to hosts other than the dashboard server').toEqual([]);
+    const fonts = await page.evaluate(async () => { await document.fonts.ready; return [...document.fonts].filter(f => f.status === 'loaded').map(f => f.family); });
+    expect(fonts, 'self-hosted fonts actually loaded').toEqual(expect.arrayContaining(['Inter', 'JetBrains Mono']));
+  });
+
   test('shows an error state — not a blank page — when the API is down', async ({ page }) => {
     await page.route('**/api/data*', r => r.fulfill({ status: 500, body: 'boom' }));
     await page.goto('/', { waitUntil: 'domcontentloaded' });
