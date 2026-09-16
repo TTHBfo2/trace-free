@@ -104,7 +104,7 @@ Then open the dashboard:
 npx trimwares serve
 ```
 
-Opens at `http://localhost:7778`. Your current project registers automatically — no extra command needed. To add projects from other directories: `npx trimwares add <path>`.
+Opens at `http://localhost:7778` and shows the project you ran it from — no extra command needed. Viewing several projects in one dashboard is a Developer feature.
 
 > **Don't see data yet?** Make sure your app has made at least one LLM call after wrapping the client. The dashboard polls every 2.5 s — data appears within seconds of your first request.
 
@@ -116,7 +116,7 @@ Opens at `http://localhost:7778`. Your current project registers automatically �
 
 | Command | What it does |
 |---|---|
-| `npx trimwares serve` | Open the local dashboard at `localhost:7778` — live-polling, 7-day history. Auto-registers your current project. |
+| `npx trimwares serve` | Open the local dashboard at `localhost:7778` — live-polling, 7-day history, for the project you run it from. |
 | `npx trimwares analyze` | Terminal cost report — attribution breakdown + savings opportunities |
 | `npx trimwares add <path>` | Register an additional project directory *(optional — `serve` auto-registers your current directory)* |
 | `npx trimwares clear` | Clear the current session log |
@@ -322,7 +322,7 @@ const openai = trimwares.openai(new OpenAI(), {
 npx trimwares serve
 ```
 
-Opens at `http://localhost:7778`. Auto-registers your current project. To add additional projects, run `npx trimwares add <path>` from each project directory.
+Opens at `http://localhost:7778` and shows the project you ran it from. Run it from each project directory to view that project; a combined multi-project view is a Developer feature.
 
 The dashboard polls every 2.5 seconds, so it stays live while your app runs. Shows the last 7 days of data for free users.
 
