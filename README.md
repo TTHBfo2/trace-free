@@ -118,7 +118,7 @@ Opens at `http://localhost:7778` and shows the project you ran it from — no ex
 |---|---|
 | `npx trimwares serve` | Open the local dashboard at `localhost:7778` — live-polling, 7-day history, for the project you run it from. |
 | `npx trimwares analyze` | Terminal cost report — attribution breakdown + savings opportunities |
-| `npx trimwares add <path>` | Register an additional project directory *(optional — `serve` auto-registers your current directory)* |
+| `npx trimwares add <path>` | Register a project in the local project registry. Used by the Developer multi-project dashboard; the free dashboard always shows the project you run `serve` from. |
 | `npx trimwares clear` | Clear the current session log |
 | `npx trimwares login --key KEY` | Activate a Developer license key |
 | `npx trimwares check` | CI gate — fails if spend/cache/tool-overhead exceed configured thresholds *(Developer)* |
