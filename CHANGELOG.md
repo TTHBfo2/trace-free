@@ -1,9 +1,28 @@
 # Changelog
 
-## [1.5.4] — 2026-09-11
+## [1.5.4] — 2026-09-16
 
 ### Added
-- **Founder contact line** in the postinstall banner and the `npx trimwares analyze` empty state: "Built by one person — tell me what Trace got wrong: hello@trimwares.com". Same line is going into the free dashboard's Developer card.
+- **Founder contact line** in the postinstall banner, the `npx trimwares analyze` empty state, and the free dashboard's Developer card: "Built by one person — tell me what Trace got wrong: hello@trimwares.com".
+- **Free dashboard source now lives in this repo** (`trimwares-dashboard/`, built by `npm run build:ui`). It previously lived in an untracked sibling folder; its only durable record was the built `ui/`.
+- **Committed browser test suite** (`e2e/`, `npm run test:e2e`, Playwright) — 10 tests that run the real CLI server against the built dashboard. Every one is a regression check for a bug listed below.
+- **Release gate** (`scripts/release-gate.mjs`) — packs the tarball, installs it into an empty folder, seeds a project, runs `trimwares serve` from the *installed* package, and asserts 21 things. `prepublishOnly` is now lint → test → build → build:ui → test:e2e → release:gate.
+
+### Fixed — free dashboard (all shipped broken in 1.5.3)
+- **Every green/blue/yellow/red accent was invisible.** `tailwind.config.ts` redeclared those names as flat strings, which replaces Tailwind's numbered palettes, so ~73 classes like `text-green-400` generated no CSS. The "Saved" segment of the spend bar, cache-hit figures, the sidebar's Developer link — all rendered white or not at all. The overrides were Tailwind's own 500 shades; removed.
+- **Muted text was unreadable** — the brightest muted tone in use was 3.1:1 on the near-black ground, footnotes were 2:1. Remapped to one four-tier scale; all real text now ≥ ~4.5:1.
+- **The Developer card said "Coming soon / Get notified"** for a tier that has been live and purchasable for weeks. Now "Get Developer — $79 once →" straight to checkout, on Overview, Recommendations and Models. Links to the pricing page say "View Developer pricing".
+- **Locked sidebar items were 404s** — real links to `/alerts`, `/history`, `/projects`, routes that don't exist in the free build. Now open the Developer pricing page.
+- **Settings → "Clear session" was a false success.** It POSTed to `/api/clear`, which didn't exist; the request fell through to the dashboard's HTML with a 200 and the button said "Cleared" without clearing anything. The route exists now (archives to `.trimwares/.sessions/`, identical to `npx trimwares clear`), the UI checks the response and shows an error if it fails, and unknown `/api/*` paths return a JSON 404 instead of the dashboard.
+- **The dashboard summed every project you'd ever served from.** `serve` registers each directory it runs in, and the default view aggregated the whole registry under one project's name. Default is now the directory `serve` was started in.
+- **Every sidebar click was a full page reload** — RSC payloads were served with the wrong MIME type, so Next rejected them. Now `text/x-component`; navigation is client-side.
+- **Blank dashboard after upgrading.** The server sent no cache headers and answered any unknown path — including a stale JS chunk from the previous build — with `index.html` and a 200, so a browser holding the old page loaded HTML as JavaScript and never hydrated. HTML is now `no-cache`, content-hashed assets `immutable`, and missing files 404.
+- **"Openai"** in provider badges → "OpenAI" (and Gemini's colour key was misspelled, so it always fell to gray). Four inconsistent money formatters → one.
+- **Fonts loaded from Google on every page view** — a third-party request from a local-first tool, and a broken layout offline. Now bundled at build time; the dashboard makes no request to any host but its own server (asserted by the e2e suite).
+- Dashboard toolchain: Next 14.2.3 → 16.3.5 (React stays 18), ESLint's Next plugin actually loads now, deterministic build ID so identical source produces byte-identical `ui/`.
+
+### Fixed — release process
+- `rollup -c` intermittently finished writing both bundles and then never exited (an exit race around the two `@rollup/plugin-typescript` instances). `npm run build` now runs the same config through rollup's JS API and exits explicitly. Output byte-identical.
 
 ### Fixed
 - **The optional embeddings package is no longer a hard dependency, and is now the actively-maintained one.** `@xenova/transformers` was listed under `dependencies`, so every `npm install @trimwares/trace` pulled in its full transitive tree (`onnxruntime` → `protobufjs`, `sharp`) — 82 packages and, at last check, 6 vulnerabilities including one critical (`protobufjs`, arbitrary code execution), even though the semantic cache it powers is disabled by default and the code already loads it via a dynamic `import()` wrapped in try/catch with a trigram-similarity fallback. A fresh `npm install @trimwares/trace` now adds 2 packages (itself + `tiktoken`) with 0 vulnerabilities, confirmed via a real `npm pack` + clean-directory install, not just a config read.
