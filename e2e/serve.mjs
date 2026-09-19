@@ -16,6 +16,6 @@ seed(dir, 40);
 console.log(`e2e: serving from ${dir}`);
 
 const child = spawn(process.execPath, [join(root, 'bin', 'trimwares.js'), 'serve', '--port', process.env.E2E_PORT ?? '7790'],
-  { cwd: dir, stdio: 'inherit', env: { ...process.env, TRIMWARES_E2E_DIR: dir } });
+  { cwd: dir, stdio: 'inherit', env: { ...process.env, TRIMWARES_E2E_DIR: dir, TRIMWARES_NO_AUTO_REGISTER: '1' } });
 child.on('exit', code => process.exit(code ?? 0));
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => child.kill());

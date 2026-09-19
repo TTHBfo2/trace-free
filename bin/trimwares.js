@@ -1452,9 +1452,17 @@ if (command === 'serve') {
 
     // Auto-register cwd if it has LLM data and isn't already in the registry.
     // Fires regardless of whether other projects exist — always bulletproof.
+    //
+    // TRIMWARES_NO_AUTO_REGISTER=1 opts out. The registry is global
+    // (~/.trimwares/projects.json) and shared with the Developer dashboard,
+    // so anything that runs `serve` from a throwaway directory — the release
+    // gate, e2e suites, CI smoke tests — would otherwise leave a permanent
+    // entry pointing at a temp folder that no longer exists. That happened:
+    // 28 of 33 registered "projects" on the maintainer's machine were gate
+    // and e2e scratch dirs.
     const reg = readProjectRegistry();
     const cwd = process.cwd();
-    if (!reg.some(p => p.path === cwd)) {
+    if (!process.env.TRIMWARES_NO_AUTO_REGISTER && !reg.some(p => p.path === cwd)) {
       const det = detectLLMProjectSync(cwd);
       if (det.compatible || det.hasExistingData) {
         reg.push({ path: cwd, name: basename(cwd), addedAt: Date.now(), providers: det.providers, hasExistingData: det.hasExistingData });

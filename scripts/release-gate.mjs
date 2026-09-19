@@ -85,7 +85,8 @@ writeFileSync(join(app, '.trimwares', 'session.jsonl'), [entry(1), entry(2), ent
 // ── 4. Serve from the INSTALLED package, exactly like `npx trimwares serve` ──
 const port = await freePort();
 const bin  = join(app, 'node_modules', '@trimwares', 'trace', 'bin', 'trimwares.js');
-const server = spawn(process.execPath, [bin, 'serve', '--port', String(port)], { cwd: app, stdio: 'pipe' });
+// TRIMWARES_NO_AUTO_REGISTER: don't let this throwaway folder into the user's global project registry.
+const server = spawn(process.execPath, [bin, 'serve', '--port', String(port)], { cwd: app, stdio: 'pipe', env: { ...process.env, TRIMWARES_NO_AUTO_REGISTER: '1' } });
 let serverLog = ''; server.stdout.on('data', d => serverLog += d); server.stderr.on('data', d => serverLog += d);
 const base = `http://localhost:${port}`;
 const up = await waitFor(`${base}/api/data`);
