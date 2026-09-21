@@ -41,6 +41,10 @@ const sh = (cmd, opts = {}) => execSync(cmd, { stdio: 'pipe', encoding: 'utf8', 
 async function freePort() {
   return new Promise((res) => { const s = createServer(); s.listen(0, () => { const p = s.address().port; s.close(() => res(p)); }); });
 }
+function runAudit(cwd) {
+  try { return sh('npm audit --omit=dev --json', { cwd }); }
+  catch (e) { if (e.stdout && String(e.stdout).trim().startsWith('{')) return String(e.stdout); throw e; }
+}
 async function waitFor(url, ms = 15000) {
   const t0 = Date.now();
   while (Date.now() - t0 < ms) { try { const r = await fetch(url); if (r.ok) return true; } catch {} await new Promise(r => setTimeout(r, 250)); }
@@ -65,9 +69,16 @@ console.log('  installed top-level:', installed.join(', '));
 // a dependency leaked back into `dependencies`.
 const expected = new Set(['@trimwares', 'tiktoken']);
 check(installed.every(d => expected.has(d)), `only expected packages installed (${installed.length})`);
-const audit = JSON.parse(sh('npm audit --omit=dev --json || true', { cwd: app }));
+// `npm audit` exits 1 whenever it finds anything, and execSync throws on a
+// non-zero exit — the JSON report is on stdout of the thrown error. This used
+// to be `... || true`, which is not a command on Windows: the first day an
+// advisory landed, the gate would have crashed instead of reporting it.
+const audit = JSON.parse(runAudit(app));
 const vulnTotal = audit?.metadata?.vulnerabilities?.total ?? -1;
 check(vulnTotal === 0, `npm audit --omit=dev on the installed package: ${vulnTotal} vulnerabilities`);
+for (const [name, entry] of Object.entries(audit?.vulnerabilities ?? {})) {
+  for (const a of (entry.via ?? []).filter(x => typeof x === 'object')) console.log(`  note ${entry.severity}: ${name} — ${a.title} (${a.url}; fixAvailable=${entry.fixAvailable})`);
+}
 
 // ── 3. Seed a tiny session so /api/data and /api/clear have something real ───
 mkdirSync(join(app, '.trimwares'));
