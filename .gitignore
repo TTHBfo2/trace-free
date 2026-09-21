@@ -30,6 +30,13 @@ BENCHMARK-DISCLOSURE.md
 SECURITY-BRIEF.md
 website/
 
+# Internal-only. This repo is public and ships to npm; the engineering log
+# and the memory manifest live in the private trimwares-log repo instead.
+# CHANGELOG.md (no suffix) is the customer changelog and IS tracked.
+/CHANGELOG-INTERNAL.md
+/MEMORY.md
+/memory/
+
 # Playwright artifacts
 playwright-report/
 test-results/
