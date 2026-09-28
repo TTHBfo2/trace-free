@@ -35,11 +35,24 @@ export class OpenAIProvider extends BaseProvider {
       arguments: JSON.parse(tc.function.arguments ?? '{}') as Record<string, unknown>,
     }));
 
+    // OpenAI's automatic prompt cache. `prompt_tokens` is the TOTAL prompt and
+    // `cached_tokens` a SUBSET of it — the opposite of Anthropic, whose
+    // input_tokens excludes cache reads. CostEngine adds inputTokens and
+    // cachedTokens together, so the cached part is subtracted here to match the
+    // convention AnthropicProvider already follows. Previously this field was
+    // never read at all, so cached tokens were billed at the full input rate.
+    const promptTokens = response.usage?.prompt_tokens ?? 0;
+    const cachedTokens = Math.min(
+      (response.usage as { prompt_tokens_details?: { cached_tokens?: number } })?.prompt_tokens_details?.cached_tokens ?? 0,
+      promptTokens,
+    );
+
     return {
       content: choice.message.content ?? '',
       model: response.model,
-      inputTokens: response.usage?.prompt_tokens ?? 0,
+      inputTokens: promptTokens - cachedTokens,
       outputTokens: response.usage?.completion_tokens ?? 0,
+      cachedTokens,
       toolCalls,
       rawResponse: response,
     };

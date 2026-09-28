@@ -13,9 +13,17 @@ import { WasteDetector } from './WasteDetector.js';
 
 // Current market pricing per 1M tokens (input / output)
 const DEFAULT_PRICING: Record<string, ModelPricing> = {
-  // OpenAI
-  'gpt-4o':               { inputPerMillion: 2.50,  outputPerMillion: 10.00 },
-  'gpt-4o-mini':          { inputPerMillion: 0.15,  outputPerMillion: 0.60  },
+  // OpenAI — cachedInputPerMillion is the automatic prompt-cache rate. Unlike
+  // Anthropic, no opt-in is needed: OpenAI caches any prompt prefix over 1024
+  // tokens by itself. The discount is NOT uniform (50% on the 4o family, 75%
+  // on 4.1), so it is stated per model rather than derived.
+  // Verified against https://developers.openai.com/api/docs/pricing 2026-09-28.
+  'gpt-4.1':              { inputPerMillion: 2.00,  outputPerMillion: 8.00,  cachedInputPerMillion: 0.50  },
+  'gpt-4.1-mini':         { inputPerMillion: 0.40,  outputPerMillion: 1.60,  cachedInputPerMillion: 0.10  },
+  'gpt-4o':               { inputPerMillion: 2.50,  outputPerMillion: 10.00, cachedInputPerMillion: 1.25  },
+  'gpt-4o-mini':          { inputPerMillion: 0.15,  outputPerMillion: 0.60,  cachedInputPerMillion: 0.075 },
+  // No cachedInputPerMillion: these predate automatic prompt caching, so cached
+  // tokens are billed at the full input rate (the ?? fallback handles it).
   'gpt-4-turbo':          { inputPerMillion: 10.00, outputPerMillion: 30.00 },
   'gpt-3.5-turbo':        { inputPerMillion: 0.50,  outputPerMillion: 1.50  },
   // Anthropic — cachedInputPerMillion is the cache-read rate (10% of input price)

@@ -387,6 +387,9 @@ async function* wrapOpenAIStream(
   let model = request.model ?? '';
   let inputTokens = 0;
   let outputTokens = 0;
+  let cachedPromptTokens = 0;
+  let promptTokens = 0;   // whole prompt incl. cached — what attribution is scaled to
+  let usageSeen = false;  // NOT the same as inputTokens === 0; see the finally block
   const requestId = generateRequestId();
   let streamErrored = false;
 
@@ -396,8 +399,19 @@ async function* wrapOpenAIStream(
       const delta = (c['choices'] as Array<{ delta?: { content?: string } }>)?.[0]?.delta?.content ?? '';
       fullContent += delta;
       if (c['model']) model = c['model'] as string;
-      const usage = c['usage'] as Record<string, number> | undefined;
-      if (usage) { inputTokens = usage['prompt_tokens'] ?? 0; outputTokens = usage['completion_tokens'] ?? 0; }
+      const usage = c['usage'] as Record<string, unknown> | undefined;
+      if (usage) {
+        usageSeen = true;
+        promptTokens = (usage['prompt_tokens'] as number) ?? 0;
+        // Same subset semantics as the non-streaming path: OpenAI's
+        // prompt_tokens INCLUDES cached_tokens, so the cached portion is split
+        // out and inputTokens becomes the uncached remainder. Arrives on the
+        // final chunk because stream_options.include_usage is set above.
+        const det = usage['prompt_tokens_details'] as { cached_tokens?: number } | undefined;
+        cachedPromptTokens = Math.min(det?.cached_tokens ?? 0, promptTokens);
+        inputTokens  = promptTokens - cachedPromptTokens;
+        outputTokens = (usage['completion_tokens'] as number) ?? 0;
+      }
       yield chunk;
     }
   } catch (err) {
@@ -414,27 +428,42 @@ async function* wrapOpenAIStream(
     const latencyMs   = Date.now() - startMs;
     const pricing     = engine.costEngine.getPricing(model);
 
-    if (inputTokens === 0) inputTokens   = engine.attributor.attribute(request, 0, pricing).totalInputTokens;
+    // Estimate ONLY when the provider never reported usage (stream errored, or
+    // the consumer broke out early). `inputTokens === 0` is not that test: once
+    // the prompt cache is warm, a fully-cached request legitimately has zero
+    // UNCACHED input tokens. Treating that as "usage missing" substituted an
+    // estimated prompt and then charged for it on top of the cached tokens —
+    // roughly 3x over-report on a fully-cached streamed call.
+    if (!usageSeen) {
+      promptTokens       = engine.attributor.attribute(request, 0, pricing).totalInputTokens;
+      inputTokens        = promptTokens;
+      cachedPromptTokens = 0;
+    }
     if (outputTokens === 0) outputTokens = Math.ceil(fullContent.length / 4);
 
-    const attribution = engine.attributor.attribute(request, outputTokens, pricing, inputTokens);
-    const cost = engine.costEngine.computeCost(inputTokens, outputTokens, pricing);
+    // Attribution covers the WHOLE prompt the provider processed, cached
+    // included — inputTokens alone is just the uncached remainder.
+    const attribution = engine.attributor.attribute(request, outputTokens, pricing, promptTokens > 0 ? promptTokens : undefined);
+    const cost = engine.costEngine.computeCost(inputTokens, outputTokens, pricing, cachedPromptTokens);
     if (!streamErrored) {
       const responseForCache = {
         content: fullContent, model, provider: engine.provider,
-        usage: { inputTokens, outputTokens, cachedTokens: 0, totalTokens: inputTokens + outputTokens },
+        usage: { inputTokens, outputTokens, cachedTokens: cachedPromptTokens, totalTokens: inputTokens + cachedPromptTokens + outputTokens },
         cost, savings: 0, cached: false, cacheType: 'none' as const,
         requestId, latencyMs,
         _rawResponse: { choices: [{ message: { content: fullContent } }] },
       };
       engine.responseCache.set(request, responseForCache as unknown as import('./types/index.js').LLMResponse);
     }
-    const entry = engine.costEngine.record({ requestId, provider: engine.provider, model, inputTokens, outputTokens, cached: false, cacheType: 'none', latencyMs, request, savings: 0 });
+    const entry = engine.costEngine.record({ requestId, provider: engine.provider, model, inputTokens, outputTokens, cached: false, cacheType: 'none', latencyMs, request, savings: 0, nativeCachedTokens: cachedPromptTokens });
     engine.sessionLog.write({
       timestamp: Date.now(), requestId, provider: engine.provider, model,
-      attribution, cached: false, cacheType: 'none', latencyMs, nativeCache: false,
+      // nativeCache means "the provider actually applied a cache discount".
+      // It used to be hardcoded false on this path while the non-streaming path
+      // set it from eligibility — the same field meaning two different things.
+      attribution, cached: false, cacheType: 'none', latencyMs, nativeCache: cachedPromptTokens > 0,
       realInputTokens: inputTokens, realOutputTokens: outputTokens,
-      nativeCachedTokens: 0, realCost: entry.cost, realSavings: entry.savings,
+      nativeCachedTokens: cachedPromptTokens, realCost: entry.cost, realSavings: entry.savings,
     });
   }
 }
@@ -497,9 +526,13 @@ async function* wrapAnthropicStream(
       : engine.attributor.attribute(request, 0, pricing).totalInputTokens;
     if (outputTokens === 0) outputTokens = Math.ceil(fullContent.length / 4);
 
-    // Rescale attribution to real provider total when available; else pure heuristic
+    // The whole prompt = billable input + cache writes + cache reads. Anthropic
+    // reports cache reads separately from input_tokens, so they must be added
+    // back for attribution or a mostly-cached request is scaled to a fraction
+    // of the prompt it actually sent.
+    const totalPrompt = providerInput + cacheReadTokens;
     const attribution = engine.attributor.attribute(
-      request, outputTokens, pricing, providerInput > 0 ? providerInput : undefined,
+      request, outputTokens, pricing, totalPrompt > 0 ? totalPrompt : undefined,
     );
     const cost = engine.costEngine.computeCost(effectiveInput, outputTokens, pricing, cacheReadTokens);
     if (!streamErrored) {
@@ -515,7 +548,10 @@ async function* wrapAnthropicStream(
     const entry = engine.costEngine.record({ requestId, provider: engine.provider, model, inputTokens: effectiveInput, outputTokens, cached: false, cacheType: 'none', latencyMs, request, savings: 0, nativeCachedTokens: cacheReadTokens });
     engine.sessionLog.write({
       timestamp: Date.now(), requestId, provider: engine.provider, model,
-      attribution, cached: false, cacheType: 'none', latencyMs, nativeCache: cacheReadTokens > 0 || cacheWriteTokens > 0,
+      // Cache READS are the discount. Cache WRITES are not — Anthropic charges
+      // a premium to create the cache entry, so a write-only request received
+      // no discount and must not be reported as cached.
+      attribution, cached: false, cacheType: 'none', latencyMs, nativeCache: cacheReadTokens > 0,
       realInputTokens: effectiveInput, realOutputTokens: outputTokens,
       nativeCachedTokens: cacheReadTokens, realCost: entry.cost, realSavings: entry.savings,
     });
@@ -604,7 +640,14 @@ function recordStreamingCacheHit(
   });
   engine.sessionLog.write({
     timestamp: Date.now(), requestId, provider: engine.provider, model: cacheHit.model,
-    attribution: engine.attributor.attribute(request, cacheHit.usage.outputTokens, engine.costEngine.getPricing(cacheHit.model)),
+    // Scale to the whole prompt of the original call. usage.inputTokens is the
+    // uncached remainder and usage.cachedTokens the cached part, so the sum is
+    // the prompt that was actually sent. Without this a replayed hit of a
+    // mostly-cached request attributed only the uncached sliver.
+    attribution: engine.attributor.attribute(
+      request, cacheHit.usage.outputTokens, engine.costEngine.getPricing(cacheHit.model),
+      (cacheHit.usage.inputTokens + (cacheHit.usage.cachedTokens ?? 0)) || undefined,
+    ),
     cached: true, cacheType: 'response', latencyMs, nativeCache: false,
     realInputTokens: cacheHit.usage.inputTokens, realOutputTokens: cacheHit.usage.outputTokens,
     nativeCachedTokens: 0, realCost: entry.cost, realSavings: entry.savings,

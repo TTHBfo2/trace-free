@@ -11,6 +11,7 @@ interface LogEntry {
   cached:      boolean;
   cacheType:   string;
   nativeCache: boolean;
+  nativeCachedTokens?: number;
   latencyMs:   number;
   inputTokens: number;
   outputTokens: number;
@@ -27,7 +28,10 @@ function getStatus(e: LogEntry): { label: string; labelCls: string; rowBorder: s
       labelCls:  'text-green-500 bg-[#0b1c0e] border border-[#1a3a20]',
       rowBorder: 'border-l-2 border-l-green-600/50',
     };
-  if (e.nativeCache)
+  // Only badge a row as cached when the provider actually discounted it.
+  // `nativeCache` used to carry a pre-call eligibility guess, so rows were
+  // labelled PROMPT CACHED for prompts that were merely big enough to cache.
+  if ((e.nativeCachedTokens ?? 0) > 0)
     return {
       label:     'PROMPT CACHED',
       labelCls:  'text-cyan-400 bg-[#071a1f] border border-[#0e2d35]',

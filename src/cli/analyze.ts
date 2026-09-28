@@ -63,7 +63,11 @@ export function renderReport(options: AnalyzeOptions): string {
   let totalCost = 0;
   let totalRequests = 0;
   let cachedRequests = 0;
+  // Needed inside the aggregation loop for per-model cached-input rates.
+  const costEngine = new CostEngine();
   let nativeCacheRequests = 0;
+  let liveRequests = 0;
+  const cacheDiscounts: number[] = [];
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
 
@@ -79,29 +83,53 @@ export function renderReport(options: AnalyzeOptions): string {
   const byModel: Record<string, { cost: number; requests: number }> = {};
 
   for (const e of entries) {
-    totalCost += e.attribution.totalCost;
+    // Spend is the REAL billed cost, not the heuristic attribution total.
+    // attribution prices every token at the full input rate, so once provider
+    // caching applies it overstates — it reported $0.0030 for calls that
+    // actually cost $0.0019. `k` rescales the per-category breakdown to the
+    // real figure, the same way bin/trimwares.js does for the dashboard.
+    const realCost = typeof e.realCost === 'number' ? e.realCost : e.attribution.totalCost;
+    const k = e.attribution.totalCost > 0 ? realCost / e.attribution.totalCost : 1;
+    totalCost += realCost;
     totalRequests++;
     if (e.cached)       cachedRequests++;
-    if (e.nativeCache)  nativeCacheRequests++;
+    // Count only requests the provider actually discounted. This used to read
+    // e.nativeCache when that flag held a pre-call eligibility guess, so the
+    // CLI reported "100% of requests had provider cache applied" for prompts
+    // that were merely large enough to be cacheable — including on Groq, which
+    // has no prompt cache at all. The dashboard aggregate was fixed in
+    // bin/trimwares.js; this call site was missed.
+    if ((e.nativeCachedTokens ?? 0) > 0) nativeCacheRequests++;
+    // A locally-cached hit never reaches the provider, so it can neither earn
+    // nor miss a provider discount. Counting it in the denominator made the
+    // "is caching already working?" test fail: one real cache hit followed by
+    // three local hits read as 25% and re-recommended caching that was on.
+    if (!e.cached) liveRequests++;
+    // Cheapest rate available for this model's cached input, for a saving
+    // estimate that reflects the provider actually in use.
+    const mp = costEngine.getPricing(e.model);
+    if (mp.cachedInputPerMillion !== undefined && mp.inputPerMillion > 0) {
+      cacheDiscounts.push(1 - mp.cachedInputPerMillion / mp.inputPerMillion);
+    }
     totalInputTokens  += e.attribution.totalInputTokens;
     totalOutputTokens += e.attribution.totalOutputTokens;
 
     const a = e.attribution;
     cats.systemPrompt.tokens        += a.systemPrompt.tokens;
-    cats.systemPrompt.cost          += a.systemPrompt.estimatedCost;
+    cats.systemPrompt.cost          += a.systemPrompt.estimatedCost * k;
     cats.toolSchemas.tokens         += a.toolSchemas.tokens;
-    cats.toolSchemas.cost           += a.toolSchemas.estimatedCost;
+    cats.toolSchemas.cost           += a.toolSchemas.estimatedCost * k;
     cats.ragChunks.tokens           += a.ragChunks.tokens;
-    cats.ragChunks.cost             += a.ragChunks.estimatedCost;
+    cats.ragChunks.cost             += a.ragChunks.estimatedCost * k;
     cats.conversationHistory.tokens += a.conversationHistory.tokens;
-    cats.conversationHistory.cost   += a.conversationHistory.estimatedCost;
+    cats.conversationHistory.cost   += a.conversationHistory.estimatedCost * k;
     cats.userQuery.tokens           += a.userQuery.tokens;
-    cats.userQuery.cost             += a.userQuery.estimatedCost;
+    cats.userQuery.cost             += a.userQuery.estimatedCost * k;
     cats.outputTokens.tokens        += a.outputTokens.tokens;
-    cats.outputTokens.cost          += a.outputTokens.estimatedCost;
+    cats.outputTokens.cost          += a.outputTokens.estimatedCost * k;
 
     if (!byModel[e.model]) byModel[e.model] = { cost: 0, requests: 0 };
-    byModel[e.model].cost     += e.attribution.totalCost;
+    byModel[e.model].cost     += realCost;
     byModel[e.model].requests++;
   }
 
@@ -166,17 +194,29 @@ export function renderReport(options: AnalyzeOptions): string {
     lines.push(`  ${bold('Savings opportunities')}`);
     lines.push('');
 
-    if (cats.systemPrompt.cost > totalCost * 0.25) {
-      const saving = cats.systemPrompt.cost * 0.90;
-      lines.push(`  ${green('✓')} Provider-native caching on system prompt  → save ${green(bold(usd(saving)))} (90% reduction)`);
+    // Don't recommend switching on something that is already on. OpenAI caches
+    // prompts over ~1024 tokens automatically, with no opt-in, so this used to
+    // tell OpenAI users to "enable" caching they were already getting — and
+    // quote a saving they were already receiving. Only suggest it when the
+    // provider is NOT already discounting these requests.
+    // Denominator is live requests only — see liveRequests above.
+    const alreadyCaching = liveRequests > 0 && nativeCacheRequests > liveRequests * 0.5;
+    // 90% is Anthropic's cache-read discount. OpenAI's is 50% (4o) or 75%
+    // (4.1), so a blanket 90% overstated the opportunity for OpenAI users.
+    // Use the weakest discount actually available across the models in use.
+    const discount = cacheDiscounts.length > 0 ? Math.min(...cacheDiscounts) : 0.90;
+    const pctLabel = `${Math.round(discount * 100)}% reduction`;
+    if (cats.systemPrompt.cost > totalCost * 0.25 && !alreadyCaching) {
+      const saving = cats.systemPrompt.cost * discount;
+      lines.push(`  ${green('✓')} Provider-native caching on system prompt  → save ${green(bold(usd(saving)))} (${pctLabel})`);
     }
     if (cats.toolSchemas.cost > totalCost * 0.08) {
-      const saving = cats.toolSchemas.cost * 0.90;
-      lines.push(`  ${green('✓')} Cache tool schema prefix                  → save ${green(bold(usd(saving)))} (90% reduction)`);
+      const saving = cats.toolSchemas.cost * discount;
+      lines.push(`  ${green('✓')} Cache tool schema prefix                  → save ${green(bold(usd(saving)))} (${pctLabel})`);
     }
     if (cats.ragChunks.cost > totalCost * 0.15) {
-      const saving = cats.ragChunks.cost * 0.90;
-      lines.push(`  ${green('✓')} Cache RAG document prefix                 → save ${green(bold(usd(saving)))} (90% reduction)`);
+      const saving = cats.ragChunks.cost * discount;
+      lines.push(`  ${green('✓')} Cache RAG document prefix                 → save ${green(bold(usd(saving)))} (${pctLabel})`);
     }
     if (cats.conversationHistory.cost > totalCost * 0.20) {
       lines.push(`  ${yellow('!')} Conversation history is large — enable ContextPruner`);
@@ -189,7 +229,6 @@ export function renderReport(options: AnalyzeOptions): string {
   }
 
   // ── Enriched waste intelligence ───────────────────────────────────────────
-  const costEngine = new CostEngine();
   for (const e of entries) {
     costEngine.record({
       requestId:    e.requestId,

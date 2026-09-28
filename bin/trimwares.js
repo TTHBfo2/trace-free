@@ -816,7 +816,11 @@ if (command === 'serve') {
       systemPromptCost += a.systemPrompt.estimatedCost * k;
       userQueryCost    += a.userQuery.estimatedCost * k;
       outputCost       += a.outputTokens.estimatedCost * k;
-      if (!e.nativeCache) systemPromptCostUncached += a.systemPrompt.estimatedCost * k;
+      // "Uncached" means the provider did not discount it. Keyed off the real
+      // signal, not the pre-call eligibility guess — otherwise a large prompt
+      // that was never actually cached was treated as already-cached, hiding a
+      // genuine saving opportunity.
+      if (!(e.nativeCachedTokens > 0)) systemPromptCostUncached += a.systemPrompt.estimatedCost * k;
       nativeCacheSavings += realSavingsOf(e);
     }
     const currentSpend    = toolSchemaCost + ragChunkCost + historyCost + systemPromptCost + userQueryCost + outputCost;
@@ -1071,6 +1075,9 @@ if (command === 'serve') {
         cached:       e.cached,
         cacheType:    e.cacheType,
         nativeCache:  e.nativeCache,
+        // The row badge keys off this, not nativeCache: only a provider-reported
+        // discount counts as "PROMPT CACHED". Older entries lack the field.
+        nativeCachedTokens: e.nativeCachedTokens ?? 0,
         latencyMs:    e.latencyMs,
         inputTokens:  e.realInputTokens,
         outputTokens: e.realOutputTokens,

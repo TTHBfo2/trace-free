@@ -170,7 +170,11 @@ export class LLMCostTrimmer {
 
     // 6. Provider-native prompt caching
     const cacheOpt           = this.nativeCacheOptimizer.optimize(req, resolvedProvider);
-    const nativeCacheApplied = cacheOpt.cacheableTokens > 0;
+    // ELIGIBILITY only: a pre-call prediction that this prompt is big enough
+    // to be worth caching. It was being logged as nativeCache, i.e. as though
+    // the discount had happened. Whether it did is known only after the
+    // response arrives, as nativeCachedTokens > 0.
+    const nativeCacheEligible = cacheOpt.cacheableTokens > 0;
     const optimizedReq: LLMRequest = {
       ...req,
       messages: cacheOpt.messages,
@@ -204,7 +208,7 @@ export class LLMCostTrimmer {
     const entry = this.costEngine.record({ requestId, provider: resolvedProvider, model: raw.model, inputTokens: raw.inputTokens, outputTokens: raw.outputTokens, cached: false, cacheType: 'none', latencyMs, request, savings: 0, nativeCachedTokens });
 
     // 9. Log session entry (metadata only)
-    this.recordToLog(requestId, resolvedProvider, raw.model, raw.inputTokens, raw.outputTokens, request, false, 'none', latencyMs, nativeCacheApplied, entry, nativeCachedTokens);
+    this.recordToLog(requestId, resolvedProvider, raw.model, raw.inputTokens, raw.outputTokens, request, false, 'none', latencyMs, nativeCachedTokens > 0, entry, nativeCachedTokens, nativeCacheEligible);
 
     return response;
   }
@@ -265,12 +269,15 @@ export class LLMCostTrimmer {
     inputTokens: number, outputTokens: number,
     request: LLMRequest, cached: boolean, cacheType: string,
     latencyMs: number, nativeCache: boolean,
-    costEntry: import('./types/index.js').CostEntry, nativeCachedTokens: number
+    costEntry: import('./types/index.js').CostEntry, nativeCachedTokens: number,
+    nativeCacheEligible = false
   ): void {
     const pricing     = this.costEngine.getPricing(model);
-    const attribution = this.attributor.attribute(request, outputTokens, pricing);
+    // Whole prompt, cached included: inputTokens here is the uncached remainder.
+    const promptTokens = inputTokens + nativeCachedTokens;
+    const attribution = this.attributor.attribute(request, outputTokens, pricing, promptTokens > 0 ? promptTokens : undefined);
     this.sessionLog.write({
-      timestamp: Date.now(), requestId, provider, model, attribution, cached, cacheType, latencyMs, nativeCache,
+      timestamp: Date.now(), requestId, provider, model, attribution, cached, cacheType, latencyMs, nativeCache, nativeCacheEligible,
       realInputTokens: inputTokens, realOutputTokens: outputTokens,
       nativeCachedTokens, realCost: costEntry.cost, realSavings: costEntry.savings,
     });

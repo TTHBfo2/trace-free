@@ -51,7 +51,14 @@ export interface SessionLogEntry {
   cached: boolean;
   cacheType: string;
   latencyMs: number;
-  nativeCache: boolean;          // whether provider-native caching was applied
+  // TRUE means the provider actually applied a cache discount to this request
+  // (equivalent to nativeCachedTokens > 0). Never set this from a prediction:
+  // anything claiming "caching worked" must be derived from real usage.
+  nativeCache: boolean;
+  // Predictive: this prompt was large enough to be worth caching. Says nothing
+  // about whether caching happened — use it to RECOMMEND caching, never to
+  // report it. Optional because entries written before 1.5.5 don't carry it.
+  nativeCacheEligible?: boolean;
   // Real billed numbers from CostEngine — derived from actual provider
   // usage tokens, not the heuristic character-count attribution above.
   realInputTokens: number;

@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.5.5] — 2026-09-28
+
+### Fixed — OpenAI prompt caching was never recorded
+
+OpenAI caches any prompt prefix over ~1024 tokens automatically, with no opt-in, and reports the discounted token count as `usage.prompt_tokens_details.cached_tokens`. Trace never read that field. Measured against real calls: a 4,901-token prompt came back with **4,736 cached tokens** — 97% of the prompt — and Trace recorded zero.
+
+Three consequences, all fixed:
+
+- **Your OpenAI spend was over-reported.** Cached tokens were priced at the full input rate and `realSavings` stayed 0. In a four-call test, Trace reported `$0.0030` for calls that actually cost `$0.0019`. Cached input now prices at the correct rate per model — 50% off on `gpt-4o`/`gpt-4o-mini`, 75% off on `gpt-4.1`/`gpt-4.1-mini` (verified against [OpenAI's pricing page](https://developers.openai.com/api/docs/pricing), 2026-09-28). Anthropic's rates were already correct and are unchanged.
+- **"N% of requests had provider cache applied" was derived from a guess.** It counted a pre-call "this prompt is big enough to be worth caching" prediction, not an actual discount — so it could report 100% on Groq, which has no prompt cache at all. It now counts only requests the provider actually discounted. The dashboard's aggregate already did this correctly; the CLI and the request-log badge did not.
+- **`npx trimwares analyze` recommended enabling caching that was already on**, quoting savings you were already receiving. It now suppresses that recommendation when the provider is already discounting your live requests, and quotes the discount rate your models actually get instead of a flat 90% (which is Anthropic's rate).
+
+### Fixed — related reporting paths
+
+- **Streaming requests:** cached tokens are captured from the final usage chunk. A *fully* cached streamed request has zero **uncached** input tokens, which is legitimate — the code previously read that as "usage missing" and substituted an estimated prompt, then billed it on top of the cached tokens.
+- **The class-based API** (`new LLMCostTrimmer(...)`) had the same gap as the wrapper and is fixed too.
+- **Token attribution** covers the whole prompt the provider processed, including its cached portion. Previously a mostly-cached request was scaled to its uncached remainder, so the "where your tokens went" breakdown under-reported every category. This applies to streamed responses and to replays served from the local response cache.
+- **Anthropic:** a request that only *creates* a cache entry no longer reports as cached. Cache writes cost a premium; only cache reads are a discount.
+- **Local cache hits** are excluded from the "is caching already working?" calculation — they never reach the provider, so they can neither earn nor miss a discount.
+
+### Known limitation
+
+Session entries written **before 1.5.5 cannot be corrected**. The provider's cached-token count was discarded at write time and is not recoverable from the stored record, so historical OpenAI totals in `history.jsonl` remain over-reported. Only entries written from 1.5.5 onward carry the real figures. If you need a clean baseline, `npx trimwares clear` archives the current session and starts fresh.
+
 ## [1.5.4] — 2026-09-16
 
 ### Added

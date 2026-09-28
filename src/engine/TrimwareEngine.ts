@@ -145,8 +145,15 @@ export class TrimwareEngine {
     const cacheHit = this.responseCache.get(request);
     if (cacheHit) {
       const latencyMs = Date.now() - startMs;
-      const entry = this.costEngine.record({ requestId, provider: this.provider, model: cacheHit.model, inputTokens: cacheHit.usage.inputTokens, outputTokens: cacheHit.usage.outputTokens, cached: true, cacheType: 'response', latencyMs, request, savings: cacheHit.cost });
-      this.logSession(requestId, cacheHit.model, cacheHit.usage.inputTokens, cacheHit.usage.outputTokens, request, true, 'response', latencyMs, false, entry, 0);
+      // The prompt this hit avoided sending is the WHOLE original prompt:
+      // usage.inputTokens is only its uncached remainder, usage.cachedTokens
+      // the rest. Attributing the remainder alone under-reported a replayed
+      // hit of a mostly-cached request to a fraction of its real size.
+      // nativeCachedTokens stays 0: nothing reached the provider, so no
+      // provider discount was earned on THIS request.
+      const hitPrompt = cacheHit.usage.inputTokens + (cacheHit.usage.cachedTokens ?? 0);
+      const entry = this.costEngine.record({ requestId, provider: this.provider, model: cacheHit.model, inputTokens: hitPrompt, outputTokens: cacheHit.usage.outputTokens, cached: true, cacheType: 'response', latencyMs, request, savings: cacheHit.cost });
+      this.logSession(requestId, cacheHit.model, hitPrompt, cacheHit.usage.outputTokens, request, true, 'response', latencyMs, false, entry, 0);
       return (cacheHit as unknown as { _rawResponse: RawSdkResult })._rawResponse;
     }
 
@@ -156,8 +163,9 @@ export class TrimwareEngine {
       const semanticHit = await this.semanticCache.get(request);
       if (semanticHit) {
         const latencyMs = Date.now() - startMs;
-        const entry = this.costEngine.record({ requestId, provider: this.provider, model: semanticHit.model, inputTokens: semanticHit.usage.inputTokens, outputTokens: semanticHit.usage.outputTokens, cached: true, cacheType: 'semantic', latencyMs, request, savings: semanticHit.cost });
-        this.logSession(requestId, semanticHit.model, semanticHit.usage.inputTokens, semanticHit.usage.outputTokens, request, true, 'semantic', latencyMs, false, entry, 0);
+        const hitPrompt = semanticHit.usage.inputTokens + (semanticHit.usage.cachedTokens ?? 0);
+        const entry = this.costEngine.record({ requestId, provider: this.provider, model: semanticHit.model, inputTokens: hitPrompt, outputTokens: semanticHit.usage.outputTokens, cached: true, cacheType: 'semantic', latencyMs, request, savings: semanticHit.cost });
+        this.logSession(requestId, semanticHit.model, hitPrompt, semanticHit.usage.outputTokens, request, true, 'semantic', latencyMs, false, entry, 0);
         return (semanticHit as unknown as { _rawResponse: RawSdkResult })._rawResponse;
       }
     }
@@ -198,8 +206,13 @@ export class TrimwareEngine {
     optimized = { ...optimized, model: resolvedModel };
 
     // 6. Provider-native prompt caching
-    const cacheOpt     = this.cacheOptimizer.optimize(optimized, this.provider);
-    const nativeCache  = cacheOpt.cacheableTokens > 0;
+    const cacheOpt = this.cacheOptimizer.optimize(optimized, this.provider);
+    // ELIGIBILITY only — "this prompt is big enough to be worth caching". It is
+    // a prediction made before the call, not a record of a discount. It drives
+    // recommendations ("you could enable caching"); it must never be used to
+    // claim caching happened. Whether it actually happened is known only after
+    // the response comes back, as usage.nativeCachedTokens > 0 below.
+    const nativeCacheEligible = cacheOpt.cacheableTokens > 0;
 
     // 7. Live call
     let rawResponse: RawSdkResult;
@@ -233,7 +246,9 @@ export class TrimwareEngine {
 
     // 10. Record cost + attribution
     const entry = this.costEngine.record({ requestId, provider: this.provider, model: resolvedModel, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cached: false, cacheType: 'none', latencyMs, request, savings: 0, nativeCachedTokens: usage.nativeCachedTokens });
-    this.logSession(requestId, resolvedModel, usage.inputTokens, usage.outputTokens, request, false, 'none', latencyMs, nativeCache, entry, usage.nativeCachedTokens);
+    // nativeCache records what the PROVIDER did, never what we predicted.
+    // `nativeCacheEligible` is kept separately for the recommendation engine.
+    this.logSession(requestId, resolvedModel, usage.inputTokens, usage.outputTokens, request, false, 'none', latencyMs, usage.nativeCachedTokens > 0, entry, usage.nativeCachedTokens, nativeCacheEligible);
 
     return rawResponse;
   }
@@ -327,16 +342,24 @@ export class TrimwareEngine {
     inputTokens: number, outputTokens: number,
     request: LLMRequest, cached: boolean, cacheType: string,
     latencyMs: number, nativeCache: boolean,
-    costEntry: import('../types/index.js').CostEntry, nativeCachedTokens: number
+    costEntry: import('../types/index.js').CostEntry, nativeCachedTokens: number,
+    nativeCacheEligible = false
   ): void {
     const pricing     = this.costEngine.getPricing(model);
     // Pass provider-reported inputTokens so attribution categories are rescaled to
     // match the real total rather than the 4-char/token heuristic estimate.
-    const attribution = this.attributor.attribute(request, outputTokens, pricing, inputTokens > 0 ? inputTokens : undefined);
+    //
+    // This must be the WHOLE prompt the provider processed — cached tokens
+    // included. `inputTokens` here is only the uncached remainder (see
+    // extractUsage), so the cached portion is added back. Without this the
+    // breakdown is scaled to a fraction of the prompt: after the cache warmed,
+    // a 4,902-token request rescaled to 166 and under-reported every category.
+    const promptTokens = inputTokens + nativeCachedTokens;
+    const attribution = this.attributor.attribute(request, outputTokens, pricing, promptTokens > 0 ? promptTokens : undefined);
     const labels = (this.config as { labels?: Record<string, string> }).labels;
     this.sessionLog.write({
       timestamp: Date.now(), requestId, provider: this.provider, model, attribution,
-      cached, cacheType, latencyMs, nativeCache,
+      cached, cacheType, latencyMs, nativeCache, nativeCacheEligible,
       realInputTokens: inputTokens, realOutputTokens: outputTokens,
       nativeCachedTokens, realCost: costEntry.cost, realSavings: costEntry.savings,
       ...(labels && Object.keys(labels).length > 0 ? { labels } : {}),
@@ -353,20 +376,47 @@ export interface RawSdkResult {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function extractUsage(raw: RawSdkResult, request: LLMRequest, engine: TrimwareEngine): { inputTokens: number; outputTokens: number; nativeCachedTokens: number } {
-  // OpenAI / Groq format
-  const usage = raw['usage'] as Record<string, number> | undefined;
-  if (usage?.['prompt_tokens']) {
-    return { inputTokens: usage['prompt_tokens'], outputTokens: usage['completion_tokens'] ?? 0, nativeCachedTokens: 0 };
+  // OpenAI / Groq format.
+  //
+  // `prompt_tokens_details.cached_tokens` is OpenAI's automatic prompt cache:
+  // any prefix over ~1024 tokens is cached without opt-in, and those tokens are
+  // billed at a discount (50% on the 4o family, 75% on 4.1). This used to be
+  // hardcoded to 0, which meant every OpenAI user's cached tokens were priced at
+  // the full input rate and `realSavings` was always 0 — Trace over-reported
+  // their spend. Measured 2026-09-28: a 4,901-token prompt came back with 4,736
+  // cached tokens, ~97% of the prompt, and Trace recorded none of it.
+  //
+  // Groq shares this branch and has no prompt cache, so it never sends the
+  // field; the ?? 0 covers that without needing to branch on provider.
+  // CAREFUL — the two providers scope these differently, and conflating them
+  // double-bills. OpenAI's `prompt_tokens` is the TOTAL prompt and
+  // `cached_tokens` is a SUBSET of it. Anthropic's `input_tokens` EXCLUDES
+  // `cache_read_input_tokens`. CostEngine.computeCost() adds the two together
+  // (uncached at full rate + cached at the discounted rate), so this function's
+  // contract is Anthropic-shaped: `inputTokens` must be the NON-cached portion.
+  // Hence the subtraction here. Passing OpenAI's raw prompt_tokens alongside
+  // cached_tokens would charge the cached tokens twice.
+  const usage = raw['usage'] as Record<string, unknown> | undefined;
+  if (typeof usage?.['prompt_tokens'] === 'number') {
+    const promptTokens = usage['prompt_tokens'] as number;
+    const details      = usage['prompt_tokens_details'] as { cached_tokens?: number } | undefined;
+    const cached       = Math.min(details?.cached_tokens ?? 0, promptTokens); // clamp: never negative input
+    return {
+      inputTokens: promptTokens - cached,
+      outputTokens: (usage['completion_tokens'] as number) ?? 0,
+      nativeCachedTokens: cached,
+    };
   }
   // Anthropic format — cache_creation_input_tokens are billed at full input
   // rate (folded into inputTokens); cache_read_input_tokens are billed at the
   // discounted cachedInputPerMillion rate.
-  if (usage?.['input_tokens']) {
-    const cacheWriteTokens = usage['cache_creation_input_tokens'] ?? 0;
-    const cacheReadTokens  = usage['cache_read_input_tokens'] ?? 0;
+  if (typeof usage?.['input_tokens'] === 'number') {
+    const num = (k: string): number => (typeof usage[k] === 'number' ? usage[k] as number : 0);
+    const cacheWriteTokens = num('cache_creation_input_tokens');
+    const cacheReadTokens  = num('cache_read_input_tokens');
     return {
-      inputTokens: usage['input_tokens'] + cacheWriteTokens,
-      outputTokens: usage['output_tokens'] ?? 0,
+      inputTokens: (usage['input_tokens'] as number) + cacheWriteTokens,
+      outputTokens: num('output_tokens'),
       nativeCachedTokens: cacheReadTokens,
     };
   }
