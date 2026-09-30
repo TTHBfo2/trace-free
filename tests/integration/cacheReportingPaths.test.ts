@@ -206,18 +206,40 @@ describe('CLI reporting', () => {
 
   // The >50%-of-live-requests suppression passed the "1 hit + 3 local hits"
   // case by luck. These are the cases it still got wrong.
-  it('a single cold request then a single cached one is not a caching recommendation', () => {
-    // Exactly 50% cached — the old `> 0.5` test failed open and recommended.
+  it('a cold miss followed by a cached hit is not an untapped opportunity', () => {
+    // Exactly 50% cached: the old `> 0.5` suppression failed open here. Then
+    // the evidence-based version still counted the cold request as recoverable
+    // — but a cold miss on a model that demonstrably caches is the cache being
+    // POPULATED, a necessary cost of caching working, not money left on the
+    // table. Recommending "enable caching" while the next request proves it is
+    // already enabled is exactly the advice a user would distrust.
     const entries = [
       entry({}),
       entry({ nativeCachedTokens: 4736, nativeCache: true, realInputTokens: 166, realCost: 0.0004 }),
     ];
     const out = strip(renderReport({ entries, isPro: true }));
-    // Half the spend is already discounted; the other half is one cold request,
-    // which is the cache being populated, not an untapped opportunity.
+    expect(out).not.toMatch(/Provider-native caching on system prompt/);
+    expect(out).not.toMatch(/Recoverable here/);
+  });
+
+  it('still recommends caching for a model that never once received a discount', () => {
+    // The other side of the same rule: no discount anywhere for this model
+    // means the opportunity is real and must still be reported.
+    const entries = [entry({}), entry({}), entry({})];
+    const out = strip(renderReport({ entries, isPro: true }));
     expect(out).toMatch(/Provider-native caching on system prompt/);
-    // ...but the figure must cover only the undiscounted request, not both.
-    expect(out).not.toMatch(/Estimated monthly saving\s+\$0\.0[4-9]/);
+    expect(out).toMatch(/Recoverable here/);
+  });
+
+  it('never projects a session forward to a month', () => {
+    // Was `saving * 30`, which assumed the session was exactly one day of
+    // traffic. It might be ten minutes. Report the observed window instead.
+    const entries = [entry({}), entry({})];
+    const out = strip(renderReport({ entries, isPro: true }));
+    expect(out).not.toMatch(/monthly/i);
+    expect(out).toMatch(/Recoverable here/);
+    expect(out).toMatch(/across 2 requests/);
+    expect(out).toMatch(/not projected/);
   });
 
   it('does not recommend caching tool schemas when every request is already cached', () => {
@@ -239,13 +261,14 @@ describe('CLI reporting', () => {
     expect(out).not.toMatch(/Cache tool schema prefix/);
   });
 
-  it('shows no monthly projection when nothing is recommended', () => {
-    // The monthly total used potentialSaving * 0.90 regardless of which lines
-    // were actually shown, so it printed a figure with nothing behind it.
+  it('shows no savings figure at all when nothing is recommended', () => {
+    // The old total was potentialSaving * 0.90 regardless of which lines were
+    // shown, so it printed a number with nothing behind it.
     const allCached = entry({ nativeCachedTokens: 4736, nativeCache: true, realInputTokens: 166, realCost: 0.0004 });
     const out = strip(renderReport({ entries: [allCached, allCached, allCached], isPro: true }));
     expect(out).not.toMatch(/Provider-native caching on system prompt/);
-    expect(out).not.toMatch(/Estimated monthly saving/);
+    expect(out).not.toMatch(/Recoverable here/);
+    expect(out).not.toMatch(/monthly/i);
   });
 
   it('claims no caching saving for a provider that has no prompt cache', () => {
@@ -263,28 +286,24 @@ describe('class-based API (LLMCostTrimmer)', () => {
   it('captures and prices OpenAI cached tokens, and logs the real signal', async () => {
     const dir = tempLogDir();
     const { LLMCostTrimmer } = await import('../../src/index.js');
-    const { BaseProvider } = await import('../../src/providers/BaseProvider.js');
-    // A stand-in provider returning what OpenAIProvider now returns after the
-    // fix: prompt_tokens minus cached_tokens as inputTokens, cached separately.
-    class StubProvider extends BaseProvider {
-      readonly name = 'openai' as const;
-      readonly defaultModel = 'gpt-4o-mini';
-      async send() {
-        return {
-          content: 'ok', model: 'gpt-4o-mini',
-          inputTokens: 166, outputTokens: 30, cachedTokens: 4736,
-          rawResponse: {},
-        } as never;
-      }
-    }
-    const trimmer = new LLMCostTrimmer(new StubProvider()) as any;
+    const { OpenAIProvider } = await import('../../src/providers/OpenAIProvider.js');
+    // The REAL provider against a mocked SDK response — a stub handing over
+    // already-normalized numbers would skip OpenAIProvider.send(), which is
+    // exactly where the extraction bug lived.
+    const provider = new OpenAIProvider(fakeOpenAI(usageBlock(4902, 4736)));
+    const trimmer = new LLMCostTrimmer(provider) as any;
     await trimmer.chat({ messages: [{ role: 'user', content: 'hello' }], model: 'gpt-4o-mini' });
     await wait();
     const [e] = readEntries(dir);
     expect(e.nativeCachedTokens).toBe(4736);
     expect(e.nativeCache).toBe(true);
-    expect(e.realSavings).toBeGreaterThan(0);
+    expect(e.realInputTokens).toBe(166);               // prompt minus cached
     expect(e.attribution.totalInputTokens).toBe(4902); // whole prompt, not 166
+    // Exact recorded cost: 166 uncached @ $0.15/M + 4736 cached @ $0.075/M
+    // + 30 output @ $0.60/M. A regression in the extraction changes this.
+    const expected = (166 / 1_000_000) * 0.15 + (4736 / 1_000_000) * 0.075 + (30 / 1_000_000) * 0.60;
+    expect(e.realCost).toBeCloseTo(expected, 10);
+    expect(e.realSavings).toBeCloseTo((4736 / 1_000_000) * 0.075, 10);
   });
 });
 

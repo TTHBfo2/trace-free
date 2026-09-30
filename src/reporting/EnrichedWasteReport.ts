@@ -26,6 +26,21 @@ export function buildEnrichedWasteReport(
   let systemPromptCost  = 0;
   let userQueryCost     = 0; let userQueryTokens     = 0;
   let outputCost        = 0; let outputTokens        = 0;
+  // Same costs again, but only for models NOT already receiving a provider
+  // cache discount. The two recovery rates below that depend on provider-native
+  // caching (systemPrompt, ragChunks) are applied to these instead of the
+  // totals — otherwise this report claimed a share of spend as "recoverable by
+  // enabling caching" on requests that were already being cached. OpenAI caches
+  // automatically, so that was the common case, not an edge one.
+  let cacheableSystemCost = 0;
+  let cacheableRagCost    = 0;
+
+  // Models observed actually receiving a discount somewhere in this data. A
+  // cold miss on such a model is the cache being populated, not an untapped
+  // opportunity, so its spend is excluded too.
+  const cachingModels = new Set(
+    entries.filter(e => (e.nativeCachedTokens ?? 0) > 0).map(e => e.model),
+  );
 
   for (const e of entries) {
     if (e.cached) continue;  // cached entries already at $0, skip for waste calc
@@ -36,6 +51,10 @@ export function buildEnrichedWasteReport(
     systemPromptCost += a.systemPrompt.estimatedCost;
     userQueryCost    += a.userQuery.estimatedCost;     userQueryTokens    += a.userQuery.tokens;
     outputCost       += a.outputTokens.estimatedCost;  outputTokens       += a.outputTokens.tokens;
+    if (!cachingModels.has(e.model)) {
+      cacheableSystemCost += a.systemPrompt.estimatedCost;
+      cacheableRagCost    += a.ragChunks.estimatedCost;
+    }
   }
 
   // ── Overpowered model heuristic ───────────────────────────────────────────
@@ -59,10 +78,14 @@ export function buildEnrichedWasteReport(
     : 0;
 
   // ── Recoverable amounts ───────────────────────────────────────────────────
-  const recoverableTool    = toolSchemaCost    * RECOVERY.toolSchemas;
-  const recoverableRAG     = ragChunkCost      * RECOVERY.ragChunks;
-  const recoverableHistory = historyCost       * RECOVERY.history;
-  const recoverableSystem  = systemPromptCost  * RECOVERY.systemPrompt;
+  // toolSchemas and history keep the full base: their remedies (per-step schema
+  // filtering, context pruning) work whether or not the provider is caching.
+  // systemPrompt and ragChunks recovery is provider-native caching by
+  // definition, so it applies only to spend that is not already discounted.
+  const recoverableTool    = toolSchemaCost      * RECOVERY.toolSchemas;
+  const recoverableRAG     = cacheableRagCost    * RECOVERY.ragChunks;
+  const recoverableHistory = historyCost         * RECOVERY.history;
+  const recoverableSystem  = cacheableSystemCost * RECOVERY.systemPrompt;
   const totalRecoverable   = recoverableTool + recoverableRAG + recoverableHistory + recoverableSystem;
 
   const genuineWork: WasteCategory = {

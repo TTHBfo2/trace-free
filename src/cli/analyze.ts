@@ -37,6 +37,16 @@ function usd(n: number): string {
   return `$${n.toFixed(2)}`;
 }
 
+function fmtDuration(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 90)      return `${s}s`;
+  const m = Math.round(s / 60);
+  if (m < 90)      return `${m}m`;
+  const h = Math.round(m / 60);
+  if (h < 48)      return `${h}h`;
+  return `${Math.round(h / 24)}d`;
+}
+
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
   if (n >= 1_000)     return `${(n / 1_000).toFixed(1)}K`;
@@ -87,6 +97,16 @@ export function renderReport(options: AnalyzeOptions): string {
 
   const byModel: Record<string, { cost: number; requests: number }> = {};
 
+  // Models that demonstrably received a provider cache discount somewhere in
+  // this data. For those, an undiscounted request is not an untapped
+  // opportunity — it is almost always the cold miss that POPULATES the cache,
+  // which is a necessary cost of caching working correctly. Recommending
+  // "enable caching" on the back of a cold miss, while the very next request
+  // proves caching is already on, is advice a user would rightly distrust.
+  const cachingModels = new Set(
+    entries.filter(e => (e.nativeCachedTokens ?? 0) > 0).map(e => e.model),
+  );
+
   for (const e of entries) {
     // Spend is the REAL billed cost, not the heuristic attribution total.
     // attribution prices every token at the full input rate, so once provider
@@ -119,7 +139,7 @@ export function renderReport(options: AnalyzeOptions): string {
     const modelDiscount = mp.cachedInputPerMillion !== undefined && mp.inputPerMillion > 0
       ? 1 - mp.cachedInputPerMillion / mp.inputPerMillion
       : 0;
-    if (!e.cached && (e.nativeCachedTokens ?? 0) === 0) {
+    if (!e.cached && (e.nativeCachedTokens ?? 0) === 0 && !cachingModels.has(e.model)) {
       const add = (acc: { cost: number; saving: number }, v: number) => {
         acc.cost   += v * k;
         acc.saving += v * k * modelDiscount;
@@ -238,12 +258,19 @@ export function renderReport(options: AnalyzeOptions): string {
       lines.push(`  ${yellow('!')} Conversation history is large — enable ContextPruner`);
     }
 
-    // The monthly figure is the sum of the lines actually shown. When nothing
-    // is recommended there is no number, rather than a projection with no
-    // evidence behind it.
+    // No monthly projection. This used to be `saving * 30`, which silently
+    // assumed the session was exactly one day of traffic — it might be ten
+    // minutes or a fortnight, and nothing here knows which. Report what was
+    // actually observed, say over how long, and leave the extrapolation to
+    // someone who knows their own volume.
     if (realizable > 0) {
+      const stamps = entries.map(e => e.timestamp).filter(t => typeof t === 'number');
+      const spanMs = stamps.length > 1 ? Math.max(...stamps) - Math.min(...stamps) : 0;
       lines.push('');
-      lines.push(`  ${bold('Estimated monthly saving')}  ${bold(green(usd(realizable * 30)))}  ${gray('(if request volume stays constant)')}`);
+      lines.push(
+        `  ${bold('Recoverable here')}  ${bold(green(usd(realizable)))}  ` +
+        gray(`(across ${totalRequests} request${totalRequests === 1 ? '' : 's'}${spanMs > 0 ? ` over ${fmtDuration(spanMs)}` : ''} — not projected)`),
+      );
     }
     lines.push('');
   }
@@ -292,11 +319,17 @@ export function renderReport(options: AnalyzeOptions): string {
     ].filter(c => c.cost > 0);
 
     for (const cat of wasteCats) {
-      const icon    = SEVERITY_ICON[cat.severity] ?? '⚪';
-      const monthly = isPro && cat.projectedMonthlySaving && cat.projectedMonthlySaving > 0
-        ? `  ${gray('→ fix saves ' + usd(cat.projectedMonthlySaving) + '/mo')}`
+      const icon = SEVERITY_ICON[cat.severity] ?? '⚪';
+      // `projectedMonthlySaving` is the per-request recoverable amount times 30,
+      // i.e. it assumes this session is exactly one day of traffic. It isn't —
+      // it might be ten minutes. The stored field keeps its name and value (the
+      // dashboard and the report type both read it), but the CLI divides it back
+      // out and states what it saw, matching the Savings section above rather
+      // than projecting in one place and refusing to in another.
+      const recoverable = isPro && cat.projectedMonthlySaving && cat.projectedMonthlySaving > 0
+        ? `  ${gray('→ fix recovers ' + usd(cat.projectedMonthlySaving / 30) + ' of this')}`
         : '';
-      lines.push(`  ${icon} ${cat.label.padEnd(26)} ${bold(yellow(usd(cat.cost)))}${monthly}`);
+      lines.push(`  ${icon} ${cat.label.padEnd(26)} ${bold(yellow(usd(cat.cost)))}${recoverable}`);
     }
 
     lines.push('');
