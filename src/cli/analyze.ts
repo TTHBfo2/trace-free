@@ -66,7 +66,6 @@ export function renderReport(options: AnalyzeOptions): string {
   // Needed inside the aggregation loop for per-model cached-input rates.
   const costEngine = new CostEngine();
   let nativeCacheRequests = 0;
-  let liveRequests = 0;
   // Per-category spend that received NO provider cache discount, and the saving
   // this user's own models would really give on it.
   const uncached = {
@@ -106,13 +105,10 @@ export function renderReport(options: AnalyzeOptions): string {
     // has no prompt cache at all. The dashboard aggregate was fixed in
     // bin/trimwares.js; this call site was missed.
     if ((e.nativeCachedTokens ?? 0) > 0) nativeCacheRequests++;
-    // A locally-cached hit never reaches the provider, so it can neither earn
-    // nor miss a provider discount. Counting it in the denominator made the
-    // "is caching already working?" test fail: one real cache hit followed by
-    // three local hits read as 25% and re-recommended caching that was on.
-    if (!e.cached) liveRequests++; // live = actually reached the provider
 
-    // Evidence for the recommendations further down. A category is only "worth
+    // Evidence for the recommendations further down. A locally-cached hit is
+    // skipped entirely: it never reached the provider, so it can neither earn
+    // nor miss a discount, and counting it either way distorts the answer. A category is only "worth
     // caching" to the extent it was NOT already discounted, so accumulate spend
     // on requests that reached the provider and got no cache discount — plus
     // the saving THIS model's own cached rate would give on it. A model with no
