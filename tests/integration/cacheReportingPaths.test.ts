@@ -203,4 +203,135 @@ describe('CLI reporting', () => {
     ];
     expect(strip(renderReport({ entries, isPro: true }))).toMatch(/Native Caching\s+0\.0%/);
   });
+
+  // The >50%-of-live-requests suppression passed the "1 hit + 3 local hits"
+  // case by luck. These are the cases it still got wrong.
+  it('a single cold request then a single cached one is not a caching recommendation', () => {
+    // Exactly 50% cached — the old `> 0.5` test failed open and recommended.
+    const entries = [
+      entry({}),
+      entry({ nativeCachedTokens: 4736, nativeCache: true, realInputTokens: 166, realCost: 0.0004 }),
+    ];
+    const out = strip(renderReport({ entries, isPro: true }));
+    // Half the spend is already discounted; the other half is one cold request,
+    // which is the cache being populated, not an untapped opportunity.
+    expect(out).toMatch(/Provider-native caching on system prompt/);
+    // ...but the figure must cover only the undiscounted request, not both.
+    expect(out).not.toMatch(/Estimated monthly saving\s+\$0\.0[4-9]/);
+  });
+
+  it('does not recommend caching tool schemas when every request is already cached', () => {
+    // Tool- and RAG-line suppression did not exist at all.
+    const toolHeavy = (over: Partial<SessionLogEntry> = {}) => entry({
+      attribution: {
+        systemPrompt: { tokens: 100, estimatedCost: 0.00002, percentOfTotal: 3 },
+        toolSchemas: { tokens: 4600, estimatedCost: 0.0007, percentOfTotal: 92 },
+        ragChunks: { tokens: 0, estimatedCost: 0, percentOfTotal: 0 },
+        conversationHistory: { tokens: 0, estimatedCost: 0, percentOfTotal: 0 },
+        userQuery: { tokens: 100, estimatedCost: 0.00002, percentOfTotal: 3 },
+        outputTokens: { tokens: 30, estimatedCost: 0.00002, percentOfTotal: 2 },
+        totalInputTokens: 4800, totalOutputTokens: 30, totalCost: 0.00074,
+      },
+      nativeCachedTokens: 4736, nativeCache: true, realInputTokens: 166, realCost: 0.0004,
+      ...over,
+    } as Partial<SessionLogEntry>);
+    const out = strip(renderReport({ entries: [toolHeavy(), toolHeavy(), toolHeavy()], isPro: true }));
+    expect(out).not.toMatch(/Cache tool schema prefix/);
+  });
+
+  it('shows no monthly projection when nothing is recommended', () => {
+    // The monthly total used potentialSaving * 0.90 regardless of which lines
+    // were actually shown, so it printed a figure with nothing behind it.
+    const allCached = entry({ nativeCachedTokens: 4736, nativeCache: true, realInputTokens: 166, realCost: 0.0004 });
+    const out = strip(renderReport({ entries: [allCached, allCached, allCached], isPro: true }));
+    expect(out).not.toMatch(/Provider-native caching on system prompt/);
+    expect(out).not.toMatch(/Estimated monthly saving/);
+  });
+
+  it('claims no caching saving for a provider that has no prompt cache', () => {
+    // Groq has no cached-input rate, so caching it saves nothing — quoting
+    // Anthropic's 90% against Groq spend was pure fiction.
+    const groq = entry({ provider: 'groq', model: 'llama-3.3-70b-versatile' });
+    const out = strip(renderReport({ entries: [groq, groq, groq], isPro: true }));
+    expect(out).not.toMatch(/Provider-native caching on system prompt/);
+  });
+});
+
+describe('class-based API (LLMCostTrimmer)', () => {
+  // A separate public entry point from the trimwares.* wrappers, and it had
+  // the identical bug. Covered here so it cannot regress independently.
+  it('captures and prices OpenAI cached tokens, and logs the real signal', async () => {
+    const dir = tempLogDir();
+    const { LLMCostTrimmer } = await import('../../src/index.js');
+    const { BaseProvider } = await import('../../src/providers/BaseProvider.js');
+    // A stand-in provider returning what OpenAIProvider now returns after the
+    // fix: prompt_tokens minus cached_tokens as inputTokens, cached separately.
+    class StubProvider extends BaseProvider {
+      readonly name = 'openai' as const;
+      readonly defaultModel = 'gpt-4o-mini';
+      async send() {
+        return {
+          content: 'ok', model: 'gpt-4o-mini',
+          inputTokens: 166, outputTokens: 30, cachedTokens: 4736,
+          rawResponse: {},
+        } as never;
+      }
+    }
+    const trimmer = new LLMCostTrimmer(new StubProvider()) as any;
+    await trimmer.chat({ messages: [{ role: 'user', content: 'hello' }], model: 'gpt-4o-mini' });
+    await wait();
+    const [e] = readEntries(dir);
+    expect(e.nativeCachedTokens).toBe(4736);
+    expect(e.nativeCache).toBe(true);
+    expect(e.realSavings).toBeGreaterThan(0);
+    expect(e.attribution.totalInputTokens).toBe(4902); // whole prompt, not 166
+  });
+});
+
+describe('Anthropic streaming', () => {
+  function fakeAnthropicStream(usage: Record<string, number>) {
+    return {
+      messages: {
+        create: async () => ({
+          async *[Symbol.asyncIterator]() {
+            yield { type: 'message_start', message: { model: 'claude-haiku-4-5', usage } };
+            yield { type: 'content_block_delta', delta: { text: 'ok' } };
+            yield { type: 'message_delta', usage: { output_tokens: 30 } };
+          },
+        }),
+      },
+    };
+  }
+
+  it('a cache WRITE alone is not reported as a cache discount', async () => {
+    // Anthropic charges a premium to create a cache entry. Reporting that as
+    // "cached" told users they were saving money on the request that cost the
+    // most. Only cache_read_input_tokens is a discount.
+    const dir = tempLogDir();
+    const client = trimwares.anthropic(fakeAnthropicStream({
+      input_tokens: 200, cache_creation_input_tokens: 4700, cache_read_input_tokens: 0,
+    }) as never) as any;
+    const stream = await client.messages.create({ model: 'claude-haiku-4-5', messages: [{ role: 'user', content: 'q' }], stream: true });
+    for await (const _ of stream as AsyncIterable<unknown>) { /* drain */ }
+    await wait();
+    const [e] = readEntries(dir);
+    expect(e.nativeCachedTokens).toBe(0);
+    expect(e.nativeCache).toBe(false);
+    expect(e.realSavings).toBe(0);
+  });
+
+  it('a cache READ is reported as a discount, and attributes the whole prompt', async () => {
+    const dir = tempLogDir();
+    const client = trimwares.anthropic(fakeAnthropicStream({
+      input_tokens: 200, cache_creation_input_tokens: 0, cache_read_input_tokens: 4700,
+    }) as never) as any;
+    const stream = await client.messages.create({ model: 'claude-haiku-4-5', messages: [{ role: 'user', content: 'q' }], stream: true });
+    for await (const _ of stream as AsyncIterable<unknown>) { /* drain */ }
+    await wait();
+    const [e] = readEntries(dir);
+    expect(e.nativeCachedTokens).toBe(4700);
+    expect(e.nativeCache).toBe(true);
+    expect(e.realSavings).toBeGreaterThan(0);
+    expect(e.attribution.totalInputTokens).toBe(4900); // 200 + 4700 cache reads
+  });
 });

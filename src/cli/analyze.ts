@@ -67,7 +67,13 @@ export function renderReport(options: AnalyzeOptions): string {
   const costEngine = new CostEngine();
   let nativeCacheRequests = 0;
   let liveRequests = 0;
-  const cacheDiscounts: number[] = [];
+  // Per-category spend that received NO provider cache discount, and the saving
+  // this user's own models would really give on it.
+  const uncached = {
+    systemPrompt: { cost: 0, saving: 0 },
+    toolSchemas:  { cost: 0, saving: 0 },
+    ragChunks:    { cost: 0, saving: 0 },
+  };
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
 
@@ -104,12 +110,27 @@ export function renderReport(options: AnalyzeOptions): string {
     // nor miss a provider discount. Counting it in the denominator made the
     // "is caching already working?" test fail: one real cache hit followed by
     // three local hits read as 25% and re-recommended caching that was on.
-    if (!e.cached) liveRequests++;
-    // Cheapest rate available for this model's cached input, for a saving
-    // estimate that reflects the provider actually in use.
+    if (!e.cached) liveRequests++; // live = actually reached the provider
+
+    // Evidence for the recommendations further down. A category is only "worth
+    // caching" to the extent it was NOT already discounted, so accumulate spend
+    // on requests that reached the provider and got no cache discount — plus
+    // the saving THIS model's own cached rate would give on it. A model with no
+    // cached rate (Groq, gpt-3.5-turbo) contributes spend but zero saving,
+    // which is the honest answer: caching it saves nothing. Previously every
+    // category was quoted at a flat 90%, Anthropic's rate, for every provider.
     const mp = costEngine.getPricing(e.model);
-    if (mp.cachedInputPerMillion !== undefined && mp.inputPerMillion > 0) {
-      cacheDiscounts.push(1 - mp.cachedInputPerMillion / mp.inputPerMillion);
+    const modelDiscount = mp.cachedInputPerMillion !== undefined && mp.inputPerMillion > 0
+      ? 1 - mp.cachedInputPerMillion / mp.inputPerMillion
+      : 0;
+    if (!e.cached && (e.nativeCachedTokens ?? 0) === 0) {
+      const add = (acc: { cost: number; saving: number }, v: number) => {
+        acc.cost   += v * k;
+        acc.saving += v * k * modelDiscount;
+      };
+      add(uncached.systemPrompt, e.attribution.systemPrompt.estimatedCost);
+      add(uncached.toolSchemas,  e.attribution.toolSchemas.estimatedCost);
+      add(uncached.ragChunks,    e.attribution.ragChunks.estimatedCost);
     }
     totalInputTokens  += e.attribution.totalInputTokens;
     totalOutputTokens += e.attribution.totalOutputTokens;
@@ -194,37 +215,40 @@ export function renderReport(options: AnalyzeOptions): string {
     lines.push(`  ${bold('Savings opportunities')}`);
     lines.push('');
 
-    // Don't recommend switching on something that is already on. OpenAI caches
-    // prompts over ~1024 tokens automatically, with no opt-in, so this used to
-    // tell OpenAI users to "enable" caching they were already getting — and
-    // quote a saving they were already receiving. Only suggest it when the
-    // provider is NOT already discounting these requests.
-    // Denominator is live requests only — see liveRequests above.
-    const alreadyCaching = liveRequests > 0 && nativeCacheRequests > liveRequests * 0.5;
-    // 90% is Anthropic's cache-read discount. OpenAI's is 50% (4o) or 75%
-    // (4.1), so a blanket 90% overstated the opportunity for OpenAI users.
-    // Use the weakest discount actually available across the models in use.
-    const discount = cacheDiscounts.length > 0 ? Math.min(...cacheDiscounts) : 0.90;
-    const pctLabel = `${Math.round(discount * 100)}% reduction`;
-    if (cats.systemPrompt.cost > totalCost * 0.25 && !alreadyCaching) {
-      const saving = cats.systemPrompt.cost * discount;
-      lines.push(`  ${green('✓')} Provider-native caching on system prompt  → save ${green(bold(usd(saving)))} (${pctLabel})`);
-    }
-    if (cats.toolSchemas.cost > totalCost * 0.08) {
-      const saving = cats.toolSchemas.cost * discount;
-      lines.push(`  ${green('✓')} Cache tool schema prefix                  → save ${green(bold(usd(saving)))} (${pctLabel})`);
-    }
-    if (cats.ragChunks.cost > totalCost * 0.15) {
-      const saving = cats.ragChunks.cost * discount;
-      lines.push(`  ${green('✓')} Cache RAG document prefix                 → save ${green(bold(usd(saving)))} (${pctLabel})`);
-    }
+    // Every line below is priced from the SAME evidence: spend that reached the
+    // provider and was NOT discounted, times the cached rate that user's own
+    // model actually offers. Three things were wrong before:
+    //   - only the system-prompt line was suppressed when caching was already
+    //     working, and only when more than half of live requests were cached,
+    //     so the tool-schema and RAG lines kept recommending caching that was
+    //     already on;
+    //   - the quoted percentage was the weakest rate across all observed models
+    //     rather than each category's own realizable saving;
+    //   - the monthly total ignored both and multiplied by a flat 0.90.
+    // A category now disappears on its own once its spend is being discounted,
+    // because the accumulator stops growing for it — no extra heuristic.
+    const rec = (label: string, u: { cost: number; saving: number }, threshold: number): number => {
+      if (!(u.cost > totalCost * threshold) || u.saving <= 0) return 0;
+      const pct = Math.round((u.saving / u.cost) * 100);
+      lines.push(`  ${green('✓')} ${label.padEnd(41)} → save ${green(bold(usd(u.saving)))} (${pct}% reduction)`);
+      return u.saving;
+    };
+
+    let realizable = 0;
+    realizable += rec('Provider-native caching on system prompt', uncached.systemPrompt, 0.25);
+    realizable += rec('Cache tool schema prefix',                 uncached.toolSchemas,  0.08);
+    realizable += rec('Cache RAG document prefix',                uncached.ragChunks,    0.15);
     if (cats.conversationHistory.cost > totalCost * 0.20) {
       lines.push(`  ${yellow('!')} Conversation history is large — enable ContextPruner`);
     }
 
-    const totalSavingEst = potentialSaving * 0.90;
-    lines.push('');
-    lines.push(`  ${bold('Estimated monthly saving')}  ${bold(green(usd(totalSavingEst * 30)))}  ${gray('(if request volume stays constant)')}`);
+    // The monthly figure is the sum of the lines actually shown. When nothing
+    // is recommended there is no number, rather than a projection with no
+    // evidence behind it.
+    if (realizable > 0) {
+      lines.push('');
+      lines.push(`  ${bold('Estimated monthly saving')}  ${bold(green(usd(realizable * 30)))}  ${gray('(if request volume stays constant)')}`);
+    }
     lines.push('');
   }
 

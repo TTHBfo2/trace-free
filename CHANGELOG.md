@@ -10,7 +10,7 @@ Three consequences, all fixed:
 
 - **Your OpenAI spend was over-reported.** Cached tokens were priced at the full input rate and `realSavings` stayed 0. In a four-call test, Trace reported `$0.0030` for calls that actually cost `$0.0019`. Cached input now prices at the correct rate per model — 50% off on `gpt-4o`/`gpt-4o-mini`, 75% off on `gpt-4.1`/`gpt-4.1-mini` (verified against [OpenAI's pricing page](https://developers.openai.com/api/docs/pricing), 2026-09-28). Anthropic's rates were already correct and are unchanged.
 - **"N% of requests had provider cache applied" was derived from a guess.** It counted a pre-call "this prompt is big enough to be worth caching" prediction, not an actual discount — so it could report 100% on Groq, which has no prompt cache at all. It now counts only requests the provider actually discounted. The dashboard's aggregate already did this correctly; the CLI and the request-log badge did not.
-- **`npx trimwares analyze` recommended enabling caching that was already on**, quoting savings you were already receiving. It now suppresses that recommendation when the provider is already discounting your live requests, and quotes the discount rate your models actually get instead of a flat 90% (which is Anthropic's rate).
+- **`npx trimwares analyze` recommended enabling caching that was already on**, quoting savings you were already receiving, and projected a monthly total from a flat 90% (Anthropic's rate) regardless. Every savings line is now priced from one piece of evidence: spend that reached the provider and received **no** cache discount, times the cached rate that specific model actually offers. So a category drops off the list once it is being discounted, each line quotes its own realizable percentage rather than one blended figure, the monthly projection is the sum of the lines actually shown — absent entirely when nothing is recommended — and nothing is claimed for a provider with no prompt cache (Groq) or a model with no cached rate.
 
 ### Fixed — related reporting paths
 
@@ -22,7 +22,9 @@ Three consequences, all fixed:
 
 ### Known limitation
 
-Session entries written **before 1.5.5 cannot be corrected**. The provider's cached-token count was discarded at write time and is not recoverable from the stored record, so historical OpenAI totals in `history.jsonl` remain over-reported. Only entries written from 1.5.5 onward carry the real figures. If you need a clean baseline, `npx trimwares clear` archives the current session and starts fresh.
+Entries written **before 1.5.5 cannot be corrected**. The provider's cached-token count was discarded at write time and is not recoverable from the stored record, so OpenAI spend in existing `history.jsonl` and `session.jsonl` records stays over-reported. Only entries written from 1.5.5 onward carry the real figures, so totals spanning the upgrade mix both.
+
+`npx trimwares clear` archives and empties the **current session** only — it does not touch `history.jsonl`, which is the durable record behind the dashboard's History page and all-time totals. There is no supported way to correct that file in place; if you want a clean all-time baseline you would have to move it aside yourself, losing the history.
 
 ## [1.5.4] — 2026-09-16
 
