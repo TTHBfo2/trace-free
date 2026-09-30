@@ -271,6 +271,60 @@ describe('CLI reporting', () => {
     expect(out).not.toMatch(/monthly/i);
   });
 
+  it('never reports a category cost or saving larger than total spend', () => {
+    // The arithmetic impossibility that shipped: the enriched section summed
+    // UNDISCOUNTED attribution costs while Total Spend used the real billed
+    // figure, so a provider-cached tool-heavy session showed "Unused tool
+    // schemas $0.0021" and "Recoverable this session $0.0019" above a
+    // "Total Spend $0.0012". More recoverable money than money spent.
+    const toolHeavyCached = entry({
+      attribution: {
+        systemPrompt: { tokens: 100, estimatedCost: 0.00002, percentOfTotal: 3 },
+        toolSchemas: { tokens: 4600, estimatedCost: 0.0007, percentOfTotal: 92 },
+        ragChunks: { tokens: 0, estimatedCost: 0, percentOfTotal: 0 },
+        conversationHistory: { tokens: 0, estimatedCost: 0, percentOfTotal: 0 },
+        userQuery: { tokens: 100, estimatedCost: 0.00002, percentOfTotal: 3 },
+        outputTokens: { tokens: 30, estimatedCost: 0.00002, percentOfTotal: 2 },
+        totalInputTokens: 4800, totalOutputTokens: 30, totalCost: 0.00074,
+      },
+      nativeCache: true, nativeCachedTokens: 4736, realInputTokens: 166,
+      realCost: 0.0003981, realSavings: 0.0003552,
+    } as Partial<SessionLogEntry>);
+    const out = strip(renderReport({ entries: [toolHeavyCached, toolHeavyCached, toolHeavyCached], isPro: true }));
+
+    const spend = Number(/Total Spend\s+\$([0-9.]+)/.exec(out)?.[1]);
+    expect(spend).toBeGreaterThan(0);
+    // Every dollar figure anywhere in the report must be <= total spend.
+    const amounts = [...out.matchAll(/\$([0-9]+\.[0-9]+)/g)].map(m => Number(m[1]));
+    expect(amounts.length).toBeGreaterThan(1);
+    for (const a of amounts) expect(a).toBeLessThanOrEqual(spend + 1e-9);
+  });
+
+  it('withholds recovery estimates rather than quoting unsupported ones', () => {
+    // RECOVERY holds flat assumptions (tool schemas 0.90, history 0.65) that
+    // predate per-model cached rates, and 90% is not evidence the schemas are
+    // unnecessary. Those dollars are withheld, and the withholding is stated —
+    // not silently rendered as zero opportunity.
+    // Needs a session that actually HAS a waste category, otherwise there is
+    // nothing to withhold and the note correctly does not appear.
+    const toolHeavy = entry({
+      attribution: {
+        systemPrompt: { tokens: 100, estimatedCost: 0.00002, percentOfTotal: 3 },
+        toolSchemas: { tokens: 4600, estimatedCost: 0.0007, percentOfTotal: 92 },
+        ragChunks: { tokens: 0, estimatedCost: 0, percentOfTotal: 0 },
+        conversationHistory: { tokens: 0, estimatedCost: 0, percentOfTotal: 0 },
+        userQuery: { tokens: 100, estimatedCost: 0.00002, percentOfTotal: 3 },
+        outputTokens: { tokens: 30, estimatedCost: 0.00002, percentOfTotal: 2 },
+        totalInputTokens: 4800, totalOutputTokens: 30, totalCost: 0.00074,
+      },
+    } as Partial<SessionLogEntry>);
+    const out = strip(renderReport({ entries: [toolHeavy, toolHeavy], isPro: true }));
+    expect(out).toMatch(/Unused tool schemas/);        // the category is shown
+    expect(out).not.toMatch(/fix recovers/);           // ...without a dollar estimate
+    expect(out).not.toMatch(/Recoverable this session/);
+    expect(out).toMatch(/recoverable is not yet/);     // and the gap is stated
+  });
+
   it('claims no caching saving for a provider that has no prompt cache', () => {
     // Groq has no cached-input rate, so caching it saves nothing — quoting
     // Anthropic's 90% against Groq spend was pure fiction.

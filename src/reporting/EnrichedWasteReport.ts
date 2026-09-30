@@ -45,15 +45,23 @@ export function buildEnrichedWasteReport(
   for (const e of entries) {
     if (e.cached) continue;  // cached entries already at $0, skip for waste calc
     const a = e.attribution;
-    toolSchemaCost   += a.toolSchemas.estimatedCost;   toolSchemaTokens   += a.toolSchemas.tokens;
-    ragChunkCost     += a.ragChunks.estimatedCost;     ragChunkTokens     += a.ragChunks.tokens;
-    historyCost      += a.conversationHistory.estimatedCost; historyTokens += a.conversationHistory.tokens;
-    systemPromptCost += a.systemPrompt.estimatedCost;
-    userQueryCost    += a.userQuery.estimatedCost;     userQueryTokens    += a.userQuery.tokens;
-    outputCost       += a.outputTokens.estimatedCost;  outputTokens       += a.outputTokens.tokens;
+    // Rescale to what was actually billed. `attribution.estimatedCost` prices
+    // every token at the full input rate, so on a provider-cached request the
+    // category costs summed here exceeded the real spend — the report showed
+    // "Unused tool schemas $0.0021" next to "Total Spend $0.0012", and a
+    // "recoverable" figure larger than the bill. Same `k` the CLI breakdown and
+    // bin/trimwares.js already use.
+    const realCost = typeof e.realCost === 'number' ? e.realCost : a.totalCost;
+    const k = a.totalCost > 0 ? realCost / a.totalCost : 1;
+    toolSchemaCost   += a.toolSchemas.estimatedCost * k;   toolSchemaTokens   += a.toolSchemas.tokens;
+    ragChunkCost     += a.ragChunks.estimatedCost * k;     ragChunkTokens     += a.ragChunks.tokens;
+    historyCost      += a.conversationHistory.estimatedCost * k; historyTokens += a.conversationHistory.tokens;
+    systemPromptCost += a.systemPrompt.estimatedCost * k;
+    userQueryCost    += a.userQuery.estimatedCost * k;     userQueryTokens    += a.userQuery.tokens;
+    outputCost       += a.outputTokens.estimatedCost * k;  outputTokens       += a.outputTokens.tokens;
     if (!cachingModels.has(e.model)) {
-      cacheableSystemCost += a.systemPrompt.estimatedCost;
-      cacheableRagCost    += a.ragChunks.estimatedCost;
+      cacheableSystemCost += a.systemPrompt.estimatedCost * k;
+      cacheableRagCost    += a.ragChunks.estimatedCost * k;
     }
   }
 

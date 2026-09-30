@@ -227,9 +227,10 @@ export function renderReport(options: AnalyzeOptions): string {
 
   // ── Savings potential (Pro only) ──────────────────────────────
   if (isPro && potentialSaving > 0) {
-    lines.push(sep);
-    lines.push(`  ${bold('Savings opportunities')}`);
-    lines.push('');
+    // Header is emitted only if something actually qualifies — an empty
+    // "Savings opportunities" block reads as a failure to find anything when it
+    // is really the correct answer that nothing is outstanding.
+    const recLines: string[] = [];
 
     // Every line below is priced from the SAME evidence: spend that reached the
     // provider and was NOT discounted, times the cached rate that user's own
@@ -246,7 +247,7 @@ export function renderReport(options: AnalyzeOptions): string {
     const rec = (label: string, u: { cost: number; saving: number }, threshold: number): number => {
       if (!(u.cost > totalCost * threshold) || u.saving <= 0) return 0;
       const pct = Math.round((u.saving / u.cost) * 100);
-      lines.push(`  ${green('✓')} ${label.padEnd(41)} → save ${green(bold(usd(u.saving)))} (${pct}% reduction)`);
+      recLines.push(`  ${green('✓')} ${label.padEnd(41)} → save ${green(bold(usd(u.saving)))} (${pct}% reduction)`);
       return u.saving;
     };
 
@@ -255,7 +256,7 @@ export function renderReport(options: AnalyzeOptions): string {
     realizable += rec('Cache tool schema prefix',                 uncached.toolSchemas,  0.08);
     realizable += rec('Cache RAG document prefix',                uncached.ragChunks,    0.15);
     if (cats.conversationHistory.cost > totalCost * 0.20) {
-      lines.push(`  ${yellow('!')} Conversation history is large — enable ContextPruner`);
+      recLines.push(`  ${yellow('!')} Conversation history is large — enable ContextPruner`);
     }
 
     // No monthly projection. This used to be `saving * 30`, which silently
@@ -266,13 +267,20 @@ export function renderReport(options: AnalyzeOptions): string {
     if (realizable > 0) {
       const stamps = entries.map(e => e.timestamp).filter(t => typeof t === 'number');
       const spanMs = stamps.length > 1 ? Math.max(...stamps) - Math.min(...stamps) : 0;
-      lines.push('');
-      lines.push(
+      recLines.push('');
+      recLines.push(
         `  ${bold('Recoverable here')}  ${bold(green(usd(realizable)))}  ` +
         gray(`(across ${totalRequests} request${totalRequests === 1 ? '' : 's'}${spanMs > 0 ? ` over ${fmtDuration(spanMs)}` : ''} — not projected)`),
       );
     }
-    lines.push('');
+
+    if (recLines.length > 0) {
+      lines.push(sep);
+      lines.push(`  ${bold('Savings opportunities')}`);
+      lines.push('');
+      lines.push(...recLines);
+      lines.push('');
+    }
   }
 
   // ── Enriched waste intelligence ───────────────────────────────────────────
@@ -281,13 +289,21 @@ export function renderReport(options: AnalyzeOptions): string {
       requestId:    e.requestId,
       provider:     e.provider,
       model:        e.model,
-      inputTokens:  e.attribution.totalInputTokens,
+      // attribution.totalInputTokens is the WHOLE prompt; CostEngine adds
+      // inputTokens + nativeCachedTokens, so hand it the uncached remainder or
+      // the cached portion gets billed twice.
+      inputTokens:  Math.max(0, e.attribution.totalInputTokens - (e.nativeCachedTokens ?? 0)),
       outputTokens: e.attribution.totalOutputTokens,
       cached:       e.cached,
       cacheType:    e.cacheType as import('../types/index.js').CacheType,
       latencyMs:    e.latencyMs,
       request:      { messages: [{ role: 'user', content: '' }] },
       savings:      e.cached ? e.attribution.totalCost : 0,
+      // Without this the rebuilt cost report priced every token at the full
+      // input rate, so `currentSpend` — the denominator behind every percentage
+      // in the enriched section — disagreed with the Total Spend printed at the
+      // top of the same report.
+      nativeCachedTokens: e.nativeCachedTokens ?? 0,
     });
   }
 
@@ -318,29 +334,27 @@ export function renderReport(options: AnalyzeOptions): string {
       cats.overpoweredModel,
     ].filter(c => c.cost > 0);
 
+    // What each category COST is measured. How much of it is recoverable is
+    // not: `RECOVERY` holds flat assumptions (tool schemas 0.90, history 0.65)
+    // that predate per-model cached-input rates, and a 90% tool-schema figure
+    // is not evidence those schemas are unnecessary. Those dollar estimates are
+    // withheld rather than shown as a number nobody can stand behind — and
+    // withheld is stated, not silently rendered as zero opportunity. The
+    // Savings section above still quotes caching, because that one is derived
+    // from the provider's own published rate on spend it did not discount.
     for (const cat of wasteCats) {
       const icon = SEVERITY_ICON[cat.severity] ?? '⚪';
-      // `projectedMonthlySaving` is the per-request recoverable amount times 30,
-      // i.e. it assumes this session is exactly one day of traffic. It isn't —
-      // it might be ten minutes. The stored field keeps its name and value (the
-      // dashboard and the report type both read it), but the CLI divides it back
-      // out and states what it saw, matching the Savings section above rather
-      // than projecting in one place and refusing to in another.
-      const recoverable = isPro && cat.projectedMonthlySaving && cat.projectedMonthlySaving > 0
-        ? `  ${gray('→ fix recovers ' + usd(cat.projectedMonthlySaving / 30) + ' of this')}`
-        : '';
-      lines.push(`  ${icon} ${cat.label.padEnd(26)} ${bold(yellow(usd(cat.cost)))}${recoverable}`);
+      const action = cat.fixDescription ? `  ${gray('→ ' + cat.fixDescription)}` : '';
+      lines.push(`  ${icon} ${cat.label.padEnd(26)} ${bold(yellow(usd(cat.cost)))}${action}`);
     }
 
     lines.push('');
     lines.push(`  ${cats.genuineWork.label.padEnd(28)} ${gray(usd(cats.genuineWork.cost))}  ${dim('(necessary spend)')}`);
 
-    if (isPro && enriched.recoverableSpend > 0) {
+    if (isPro && wasteCats.length > 0) {
       lines.push('');
-      lines.push(`  ${bold('Recoverable this session')}  ${bold(green(usd(enriched.recoverableSpend)))}  ${dim(`(${enriched.recoverablePercent}% of current spend)`)}`);
-      if (enriched.topFix) {
-        lines.push(`  ${bold('Top action')}  ${enriched.topFix.fix ?? ''}  ${dim('→ ' + (enriched.topFix.fixDescription ?? ''))}`);
-      }
+      lines.push(`  ${dim('Costs above are measured. How much of each is recoverable is not yet')}`);
+      lines.push(`  ${dim('estimated per model — treat these as "worth reviewing", not as a quote.')}`);
     }
     lines.push('');
   }
