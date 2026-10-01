@@ -20,8 +20,11 @@ export interface DashboardApiResponse {
     totalGrossSpend: number;
     alreadySaved: number;
     currentSpend: number;
-    recoverableSpend: number;
-    recoverablePercent: number;
+    // Withheld by the server, which sends recoveryEstimatesUnavailable in
+    // their place. Optional so that absent cannot silently become 0.
+    recoverableSpend?: number;
+    recoverablePercent?: number;
+    recoveryEstimatesUnavailable?: string;
     sessionRequests: number;
     topFix: {
       label: string;

@@ -5,12 +5,23 @@ import {
 import { SessionLogEntry } from '../types/index.js';
 
 // Conservative recovery rates — what we can realistically save with each fix
+// WITHHELD. These flat rates predate per-model cached-input pricing, and a 90%
+// tool-schema rate is not evidence those schemas are unnecessary. They are kept
+// only because the severity thresholds below were calibrated against them; no
+// dollar figure derived from them is published any more. See
+// UNAVAILABLE_REASON and the omitted recoverableSpend / projectedMonthlySaving.
 const RECOVERY = {
   toolSchemas:  0.90,   // Anthropic cache_control or per-step filtering
   ragChunks:    0.90,   // Provider-native prefix caching on stable docs
   history:      0.65,   // Context pruning / rolling window cap
   systemPrompt: 0.85,   // Provider-native caching (when >= 1024 tokens)
 };
+
+const UNAVAILABLE_REASON =
+  'Recovery amounts are withheld: the per-category recovery rates predate ' +
+  'per-model cached-input pricing, and category costs are estimated ' +
+  'allocations of the calculated request cost rather than independent ' +
+  'measurements. Treat the category costs as "worth reviewing", not as a quote.';
 
 export function buildEnrichedWasteReport(
   entries: SessionLogEntry[],
@@ -85,16 +96,18 @@ export function buildEnrichedWasteReport(
     ? parseFloat(((cost / totalAllCost) * 100).toFixed(1))
     : 0;
 
-  // ── Recoverable amounts ───────────────────────────────────────────────────
-  // toolSchemas and history keep the full base: their remedies (per-step schema
-  // filtering, context pruning) work whether or not the provider is caching.
-  // systemPrompt and ragChunks recovery is provider-native caching by
-  // definition, so it applies only to spend that is not already discounted.
-  const recoverableTool    = toolSchemaCost      * RECOVERY.toolSchemas;
-  const recoverableRAG     = cacheableRagCost    * RECOVERY.ragChunks;
-  const recoverableHistory = historyCost         * RECOVERY.history;
-  const recoverableSystem  = cacheableSystemCost * RECOVERY.systemPrompt;
-  const totalRecoverable   = recoverableTool + recoverableRAG + recoverableHistory + recoverableSystem;
+  // ── Recoverable amounts: NOT PUBLISHED ────────────────────────────────────
+  // Nothing derived from RECOVERY leaves this function any more. The rates are
+  // flat assumptions predating per-model cached-input pricing, and the category
+  // costs they multiply are estimated allocations of the request cost, not
+  // independent measurements — so the product of the two is not a figure to put
+  // in front of someone spending real money. `recoveryEstimatesUnavailable`
+  // carries the reason instead; see UNAVAILABLE_REASON.
+  //
+  // `cacheableSystemCost` / `cacheableRagCost` are still computed above because
+  // the CLI's Savings section needs the same "not already discounted" split,
+  // and keeping the definition in one place stops the two drifting apart.
+  void cacheableSystemCost; void cacheableRagCost; void RECOVERY;
 
   const genuineWork: WasteCategory = {
     label:          'Genuine work',
@@ -112,7 +125,6 @@ export function buildEnrichedWasteReport(
     severity:       toolSchemaCost > currentSpend * 0.10 ? 'critical' : 'warning',
     fix:            'filterToolSchemas: true  +  Anthropic cache_control',
     fixDescription: 'Only send tools relevant to current step, then cache the schema prefix',
-    projectedMonthlySaving: recoverableTool * 30,
   };
 
   const redundantRAGChunks: WasteCategory = {
@@ -122,8 +134,7 @@ export function buildEnrichedWasteReport(
     percentOfSpend: pct(ragChunkCost),
     severity:       ragChunkCost > currentSpend * 0.15 ? 'critical' : ragChunkCost > 0 ? 'warning' : 'info',
     fix:            'Provider-native prompt caching on stable documents',
-    fixDescription: 'Cache stable document prefixes — same docs retrieved repeatedly cost 90% less',
-    projectedMonthlySaving: recoverableRAG * 30,
+    fixDescription: 'Cache stable document prefixes — providers discount repeated prefixes, by an amount that varies with provider and model',
   };
 
   const staleContext: WasteCategory = {
@@ -134,7 +145,6 @@ export function buildEnrichedWasteReport(
     severity:       historyCost > currentSpend * 0.15 ? 'warning' : 'info',
     fix:            'maxHistoryTurns: 10',
     fixDescription: 'Rolling window keeps last 10 turns — older context stops accumulating',
-    projectedMonthlySaving: recoverableHistory * 30,
   };
 
   const repeatedPrompts: WasteCategory = {
@@ -153,23 +163,24 @@ export function buildEnrichedWasteReport(
     percentOfSpend: pct(overpoweredModelCost),
     severity:       overpoweredModelCost > currentSpend * 0.10 ? 'warning' : 'info',
     fix:            'routeToCheapestModel: true',
-    fixDescription: 'Route simple requests to GPT-4o-mini or Claude Haiku — 94% cheaper per call',
-    projectedMonthlySaving: overpoweredModelCost * 0.90 * 30,
+    fixDescription: 'Route simple requests to a smaller model — per-call price differs by model; compare against your current one',
   };
 
   // ── Top fix = highest projected monthly saving ────────────────────────────
   const fixable = [unusedToolSchemas, redundantRAGChunks, staleContext, overpoweredModel]
-    .filter(c => (c.projectedMonthlySaving ?? 0) > 0)
-    .sort((a, b) => (b.projectedMonthlySaving ?? 0) - (a.projectedMonthlySaving ?? 0));
+    // Ordered by measured cost. It used to sort by projectedMonthlySaving,
+    // which is no longer published — and since that was cost x a constant, the
+    // ordering is unchanged for any single-rate comparison anyway.
+    .filter(c => c.cost > 0)
+    .sort((a, b) => b.cost - a.cost);
 
   return {
     totalGrossSpend,
     alreadySaved,
     currentSpend,
-    recoverableSpend:    totalRecoverable,
-    recoverablePercent:  currentSpend > 0
-      ? parseFloat(((totalRecoverable / currentSpend) * 100).toFixed(1))
-      : 0,
+    // recoverableSpend / recoverablePercent deliberately ABSENT — see
+    // UNAVAILABLE_REASON. Consumers must render this as unavailable, not zero.
+    recoveryEstimatesUnavailable: UNAVAILABLE_REASON,
     categories: {
       unusedToolSchemas,
       redundantRAGChunks,
@@ -188,7 +199,7 @@ function emptyReport(): EnrichedWasteReport {
   const empty: WasteCategory = { label: '', tokens: 0, cost: 0, percentOfSpend: 0, severity: 'info' };
   return {
     totalGrossSpend: 0, alreadySaved: 0, currentSpend: 0,
-    recoverableSpend: 0, recoverablePercent: 0,
+    recoveryEstimatesUnavailable: UNAVAILABLE_REASON,
     categories: {
       unusedToolSchemas: empty, redundantRAGChunks: empty, staleContext: empty,
       repeatedPrompts: empty, overpoweredModel: empty, genuineWork: empty,

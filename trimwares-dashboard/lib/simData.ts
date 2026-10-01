@@ -98,8 +98,11 @@ export interface DerivedWasteReport {
   totalGrossSpend:    number;
   alreadySaved:       number;
   currentSpend:       number;
-  recoverableSpend:   number;
-  recoverablePercent: number;
+  // Optional: the server withholds these and sends recoveryEstimatesUnavailable
+  // instead. Absent must render as "not assessed", never as 0.
+  recoverableSpend?:   number;
+  recoverablePercent?: number;
+  recoveryEstimatesUnavailable?: string;
   categories:         WasteCategoryData[];
   topFix:             WasteCategoryData | null;
   sessionRequests:    number;
@@ -107,7 +110,7 @@ export interface DerivedWasteReport {
 
 export function deriveWasteReport(entries: SessionEntry[]): DerivedWasteReport {
   if (entries.length === 0) {
-    return { totalGrossSpend: 0, alreadySaved: 0, currentSpend: 0, recoverableSpend: 0, recoverablePercent: 0, categories: [], topFix: null, sessionRequests: 0 };
+    return { totalGrossSpend: 0, alreadySaved: 0, currentSpend: 0, categories: [], topFix: null, sessionRequests: 0 };
   }
   let toolSchemaCost = 0, ragChunkCost = 0, historyCost = 0;
   let systemPromptCost = 0, userQueryCost = 0, outputCost = 0, alreadySaved = 0;

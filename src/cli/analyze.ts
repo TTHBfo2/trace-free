@@ -247,7 +247,7 @@ export function renderReport(options: AnalyzeOptions): string {
     const rec = (label: string, u: { cost: number; saving: number }, threshold: number): number => {
       if (!(u.cost > totalCost * threshold) || u.saving <= 0) return 0;
       const pct = Math.round((u.saving / u.cost) * 100);
-      recLines.push(`  ${green('✓')} ${label.padEnd(41)} → save ${green(bold(usd(u.saving)))} (${pct}% reduction)`);
+      recLines.push(`  ${green('✓')} ${label.padEnd(41)} → up to ${green(bold(usd(u.saving)))} (${pct}% if cacheable)`);
       return u.saving;
     };
 
@@ -269,7 +269,7 @@ export function renderReport(options: AnalyzeOptions): string {
       const spanMs = stamps.length > 1 ? Math.max(...stamps) - Math.min(...stamps) : 0;
       recLines.push('');
       recLines.push(
-        `  ${bold('Recoverable here')}  ${bold(green(usd(realizable)))}  ` +
+        `  ${bold('If fully cacheable')}  ${bold(green(usd(realizable)))}  ` +
         gray(`(across ${totalRequests} request${totalRequests === 1 ? '' : 's'}${spanMs > 0 ? ` over ${fmtDuration(spanMs)}` : ''} — not projected)`),
       );
     }
@@ -353,8 +353,8 @@ export function renderReport(options: AnalyzeOptions): string {
 
     if (isPro && wasteCats.length > 0) {
       lines.push('');
-      lines.push(`  ${dim('Costs above are measured. How much of each is recoverable is not yet')}`);
-      lines.push(`  ${dim('estimated per model — treat these as "worth reviewing", not as a quote.')}`);
+      lines.push(`  ${dim('Category costs are estimated allocations of the calculated request')}`);
+      lines.push(`  ${dim('cost. Recovery amounts are withheld pending sufficient evidence.')}`);
     }
     lines.push('');
   }

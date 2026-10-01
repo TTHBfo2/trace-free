@@ -43,13 +43,15 @@ function HeroCard({ rec }: { rec: Recommendation }) {
             <p className="text-white font-semibold text-lg leading-snug">{rec.title}</p>
           </div>
           <div className="text-right flex-shrink-0">
-            {rec.savingsPct != null && (
-              <p className="text-3xl font-bold text-green-400 leading-none">
-                ↓{rec.savingsPct}%
-              </p>
+            {/* Savings figures withheld: they were a flat rate x 30. What the
+                recommendation carries instead is where it was observed. */}
+            {rec.percentOfSpend != null && (
+              <p className="text-2xl font-bold text-white leading-none tabular-nums">{rec.percentOfSpend}%</p>
             )}
-            <p className="text-xs text-[#7c7c7c] mt-1">per request</p>
-            <p className="text-sm font-mono text-[#9a9a9a] mt-1.5">{usd(rec.estimatedMonthlySavings)}<span className="text-xs text-[#7c7c7c]">/mo</span></p>
+            <p className="text-xs text-[#7c7c7c] mt-1">of session spend</p>
+            {rec.observedCount != null && (
+              <p className="text-sm text-[#7c7c7c] mt-1.5">Observed in {rec.observedCount} request{rec.observedCount === 1 ? '' : 's'}</p>
+            )}
           </div>
         </div>
 
@@ -141,11 +143,8 @@ function SecondaryCard({ rec, rank }: { rec: Recommendation; rank: number }) {
           <div className="flex items-start justify-between gap-4 mb-2">
             <p className="text-sm font-semibold text-white">{rec.title}</p>
             <div className="text-right flex-shrink-0">
-              {rec.savingsPct != null && (
-                <p className="text-xl font-bold text-green-400 leading-none">↓{rec.savingsPct}%</p>
-              )}
               <p className="text-xs font-mono text-[#7c7c7c] mt-1">
-                {usd(rec.estimatedMonthlySavings)}<span className="text-[#7c7c7c]">/mo</span>
+                {rec.percentOfSpend != null ? `${rec.percentOfSpend}% of spend` : ''}
               </p>
             </div>
           </div>
@@ -196,10 +195,8 @@ function CompactRow({ rec, rank, last }: { rec: Recommendation; rank: number; la
       <span className="text-[11px] font-mono text-[#707070] w-5 flex-shrink-0">{rank}</span>
       <span className="text-sm text-[#9a9a9a] flex-1 min-w-0 truncate">{rec.title}</span>
       <div className="flex items-center gap-3 flex-shrink-0">
-        {rec.savingsPct != null && (
-          <span className="text-sm font-semibold text-green-500">↓{rec.savingsPct}%</span>
-        )}
-        <span className="text-xs font-mono text-[#7c7c7c]">{usd(rec.estimatedMonthlySavings)}/mo</span>
+
+        <span className="text-xs text-[#7c7c7c]">{rec.observedCount != null ? `observed in ${rec.observedCount}` : ''}</span>
         <span className={clsx('text-[11px] font-medium px-1.5 py-0.5 rounded border hidden sm:block', diff.cls)}>
           {diff.label}
         </span>

@@ -794,10 +794,19 @@ if (command === 'serve') {
   function realCostOf(e)    { return e.realCost    ?? 0; }
   function realSavingsOf(e) { return e.realSavings ?? 0; }
 
+  // Why every recovery dollar is withheld. Sent to the dashboard so it can
+  // explain the absence rather than silently showing nothing.
+  const RECOVERY_UNAVAILABLE =
+    'Recovery amounts are not estimated: the per-category rates are flat ' +
+    'assumptions, the category costs they multiply are estimated allocations ' +
+    'of the calculated request cost, and a session is not a month. Spend, ' +
+    'cache savings and request counts below are calculated from provider ' +
+    'usage and are unaffected.';
+
   function deriveWasteReport(entries) {
     if (!entries.length) return {
       totalGrossSpend: 0, alreadySaved: 0, currentSpend: 0,
-      recoverableSpend: 0, recoverablePercent: 0, categories: [], topFix: null, sessionRequests: 0,
+      recoveryEstimatesUnavailable: RECOVERY_UNAVAILABLE, categories: [], topFix: null, sessionRequests: 0,
     };
     let toolSchemaCost = 0, ragChunkCost = 0, historyCost = 0;
     let systemPromptCost = 0, userQueryCost = 0, outputCost = 0;
@@ -836,24 +845,33 @@ if (command === 'serve') {
     // and reflected in nativeCacheSavings below.
     const rSystem  = systemPromptCostUncached * 0.85;
     const cats = [
-      { label: 'Unused tool schemas',        cost: toolSchemaCost,   percentOfSpend: pct(toolSchemaCost),   severity: toolSchemaCost > currentSpend * 0.10 ? 'critical' : 'warning', fixDescription: 'Cache tool schema prefix or filter per-step',            projectedMonthlySaving: rTool    * 30 },
-      { label: 'Redundant RAG chunks',       cost: ragChunkCost,     percentOfSpend: pct(ragChunkCost),     severity: ragChunkCost > currentSpend * 0.15 ? 'critical' : ragChunkCost > 0 ? 'warning' : 'info', fixDescription: 'Provider-native prefix caching on stable docs', projectedMonthlySaving: rRAG     * 30 },
-      { label: 'Stale conversation history', cost: historyCost,      percentOfSpend: pct(historyCost),      severity: historyCost > currentSpend * 0.15 ? 'warning' : 'info',     fixDescription: 'maxHistoryTurns: 10 rolling window',                     projectedMonthlySaving: rHistory * 30 },
-      { label: 'System prompts', cost: systemPromptCost, percentOfSpend: pct(systemPromptCost), severity: systemPromptCostUncached > currentSpend * 0.20 ? 'warning' : systemPromptCostUncached > 0 ? 'info' : 'good', fixDescription: systemPromptCostUncached > 0 ? 'Anthropic cache_control on stable instructions' : 'Already covered by provider-native caching', projectedMonthlySaving: rSystem  * 30 },
+      { label: 'Unused tool schemas',        cost: toolSchemaCost,   percentOfSpend: pct(toolSchemaCost),   severity: toolSchemaCost > currentSpend * 0.10 ? 'critical' : 'warning', fixDescription: 'Cache tool schema prefix or filter per-step' },
+      { label: 'Redundant RAG chunks',       cost: ragChunkCost,     percentOfSpend: pct(ragChunkCost),     severity: ragChunkCost > currentSpend * 0.15 ? 'critical' : ragChunkCost > 0 ? 'warning' : 'info', fixDescription: 'Provider-native prefix caching on stable docs' },
+      { label: 'Stale conversation history', cost: historyCost,      percentOfSpend: pct(historyCost),      severity: historyCost > currentSpend * 0.15 ? 'warning' : 'info',     fixDescription: 'maxHistoryTurns: 10 rolling window' },
+      { label: 'System prompts', cost: systemPromptCost, percentOfSpend: pct(systemPromptCost), severity: systemPromptCostUncached > currentSpend * 0.20 ? 'warning' : systemPromptCostUncached > 0 ? 'info' : 'good', fixDescription: systemPromptCostUncached > 0 ? 'Anthropic cache_control on stable instructions' : 'Already covered by provider-native caching' },
       { label: 'Repeated prompts ✓ saved',   cost: responseCacheSavings, percentOfSpend: pct(responseCacheSavings), severity: 'good', fixDescription: 'Response cache active — identical questions at $0' },
       { label: 'Native prompt caching ✓ active', cost: nativeCacheSavings, percentOfSpend: pct(nativeCacheSavings), severity: 'good', fixDescription: 'Provider-side prompt cache is discounting repeated context' },
       { label: 'Genuine work',               cost: userQueryCost + outputCost, percentOfSpend: pct(userQueryCost + outputCost), severity: 'good', fixDescription: 'User queries + output — cannot be reduced' },
     ].filter(c => c.cost > 0);
     const topFix = [...cats]
-      .filter(c => c.severity !== 'good' && (c.projectedMonthlySaving ?? 0) > 0)
-      .sort((a, b) => (b.projectedMonthlySaving ?? 0) - (a.projectedMonthlySaving ?? 0))[0] ?? null;
+      .filter(c => c.severity !== 'good' && c.cost > 0)
+      .sort((a, b) => b.cost - a.cost)[0] ?? null;
+    // recoverableSpend / recoverablePercent are deliberately ABSENT. They were
+    // flat rates (tools 0.90, RAG 0.90, history 0.65, system 0.85) applied to
+    // estimated category allocations, then projected x30 as though the session
+    // were one day of traffic. Neither assumption is evidence. Consumers must
+    // render this as unavailable — never as $0, and never as "well optimized".
+    void rTool; void rRAG; void rHistory; void rSystem;
     return { totalGrossSpend, alreadySaved, currentSpend,
-      recoverableSpend: rTool + rRAG + rHistory + rSystem,
-      recoverablePercent: currentSpend > 0 ? parseFloat((((rTool + rRAG + rHistory + rSystem) / currentSpend) * 100).toFixed(1)) : 0,
+      recoveryEstimatesUnavailable: RECOVERY_UNAVAILABLE,
       categories: cats, topFix, sessionRequests: entries.length };
   }
 
+  // Was: 95 - recoverablePercent * 0.75. With recovery withheld there is no
+  // defensible score, and defaulting to 95 would tell everyone they are nearly
+  // perfectly optimized — the worst possible failure mode for a missing input.
   function computeOptimizationScore(waste) {
+    if (!waste || waste.recoveryEstimatesUnavailable) return null;
     if (!waste || (waste.currentSpend === 0 && waste.alreadySaved === 0)) return null;
     const recov = waste.recoverablePercent ?? 0;
     let score = 95 - recov * 0.75;
@@ -867,7 +885,13 @@ if (command === 'serve') {
     const recs = [];
     const cats = waste.categories ?? [];
 
-    function monthly(cat) { return cat?.projectedMonthlySaving ?? 0; }
+    // Recovery dollars are withheld upstream, so a recommendation carries no
+    // savings figure and no percentage. What it keeps is what was observed:
+    // the category's share of spend, how many requests showed it, and tokens
+    // per request. That is evidence; a flat rate x 30 was not.
+    function observedIn(count) {
+      return `Observed in ${count} of ${entries.length} request${entries.length === 1 ? '' : 's'}.`;
+    }
 
     function sumTokens(field) {
       return entries.reduce((s, e) => s + (e.attribution?.[field]?.tokens ?? 0), 0);
@@ -877,14 +901,6 @@ if (command === 'serve') {
       return count > 0 ? Math.round(total / count) : 0;
     }
 
-    // Derive the actual savings rate from what deriveWasteReport already computed:
-    // projectedMonthlySaving = rate * cat.cost * 30  →  rate = projected / (cost * 30)
-    // For system prompt this correctly reflects the uncached fraction, so the
-    // displayed % adjusts if provider-native caching is already active.
-    function deriveSavingsPct(cat) {
-      if (!cat || cat.cost <= 0 || monthly(cat) <= 0) return 0;
-      return Math.round((monthly(cat) / (cat.cost * 30)) * 100);
-    }
 
     // Confidence = how consistently did we see this token type across requests.
     function observationRate(count) {
@@ -899,18 +915,15 @@ if (command === 'serve') {
     if (sysCat && sysCat.cost > 0 && sysCat.severity !== 'good') {
       const sysEntries  = entries.filter(e => (e.attribution?.systemPrompt?.tokens ?? 0) > 0);
       const totalTokens = sumTokens('systemPrompt');
-      const savingsPct  = deriveSavingsPct(sysCat);
       const confidence  = observationRate(sysEntries.length);
       recs.push({
         id: 'cache_system_prompt',
         title: 'Cache your system prompt',
-        description: `Your system prompt is ${sysCat.percentOfSpend}% of spend and re-sent on every request. Adding Anthropic's cache_control cuts this cost by ~${savingsPct}%.`,
-        estimatedMonthlySavings: monthly(sysCat),
+        description: `Your system prompt is ${sysCat.percentOfSpend}% of spend and re-sent on every request. Provider prompt caching discounts repeated prefixes; the size of the discount depends on your provider and model. ${observedIn(sysEntries.length)}`,
         confidence,
         difficulty: 'easy',
         timeToImplement: '5 min',
         category: 'caching',
-        savingsPct,
         observedCount: sysEntries.length,
         tokensPerRequest: perReq(totalTokens, sysEntries.length),
         percentOfSpend: sysCat.percentOfSpend,
@@ -921,18 +934,15 @@ if (command === 'serve') {
     if (toolCat && toolCat.cost > 0) {
       const toolEntries = entries.filter(e => (e.attribution?.toolSchemas?.tokens ?? 0) > 0);
       const totalTokens = sumTokens('toolSchemas');
-      const savingsPct  = deriveSavingsPct(toolCat);
       const confidence  = observationRate(toolEntries.length);
       recs.push({
         id: 'cache_tool_schemas',
         title: 'Cache tool schema definitions',
-        description: `Tool definitions are ${toolCat.percentOfSpend}% of spend — re-sent on every agent step even when unchanged. Cache the schema prefix once to cut ~${savingsPct}%.`,
-        estimatedMonthlySavings: monthly(toolCat),
+        description: `Tool definitions are ${toolCat.percentOfSpend}% of spend, re-sent on every agent step even when unchanged. Sending only the tools a step needs, and caching the rest of the prefix, both reduce this. ${observedIn(toolEntries.length)}`,
         confidence,
         difficulty: 'easy',
         timeToImplement: '5 min',
         category: 'caching',
-        savingsPct,
         observedCount: toolEntries.length,
         tokensPerRequest: perReq(totalTokens, toolEntries.length),
         percentOfSpend: toolCat.percentOfSpend,
@@ -943,18 +953,15 @@ if (command === 'serve') {
     if (ragCat && ragCat.cost > 0) {
       const ragEntries  = entries.filter(e => (e.attribution?.ragChunks?.tokens ?? 0) > 0);
       const totalTokens = sumTokens('ragChunks');
-      const savingsPct  = deriveSavingsPct(ragCat);
       const confidence  = observationRate(ragEntries.length);
       recs.push({
         id: 'cache_rag_context',
         title: 'Cache stable document context',
-        description: `Retrieved documents are ${ragCat.percentOfSpend}% of spend. If your knowledge base is stable, mark the document block cacheable to cut ~${savingsPct}% on repeated retrievals.`,
-        estimatedMonthlySavings: monthly(ragCat),
+        description: `Retrieved documents are ${ragCat.percentOfSpend}% of spend. If your knowledge base is stable, marking the document block cacheable lets the provider discount repeated retrievals. ${observedIn(ragEntries.length)}`,
         confidence,
         difficulty: 'medium',
         timeToImplement: '20 min',
         category: 'caching',
-        savingsPct,
         observedCount: ragEntries.length,
         tokensPerRequest: perReq(totalTokens, ragEntries.length),
         percentOfSpend: ragCat.percentOfSpend,
@@ -965,18 +972,15 @@ if (command === 'serve') {
     if (histCat && histCat.cost > 0) {
       const histEntries = entries.filter(e => (e.attribution?.conversationHistory?.tokens ?? 0) > 0);
       const totalTokens = sumTokens('conversationHistory');
-      const savingsPct  = deriveSavingsPct(histCat);
       const confidence  = observationRate(histEntries.length);
       recs.push({
         id: 'trim_conversation_history',
         title: 'Limit conversation history window',
-        description: `Conversation history is ${histCat.percentOfSpend}% of spend. Keeping only the last 10 turns reduces context size by ~${savingsPct}% with minimal quality impact.`,
-        estimatedMonthlySavings: monthly(histCat),
+        description: `Conversation history is ${histCat.percentOfSpend}% of spend and grows with every turn. A rolling window caps it; how much that saves depends on how long your conversations run. ${observedIn(histEntries.length)}`,
         confidence,
         difficulty: 'easy',
         timeToImplement: '10 min',
         category: 'pruning',
-        savingsPct,
         observedCount: histEntries.length,
         tokensPerRequest: perReq(totalTokens, histEntries.length),
         percentOfSpend: histCat.percentOfSpend,
@@ -991,25 +995,22 @@ if (command === 'serve') {
       );
       if (expensive.length > entries.length * 0.3) {
         const expensiveCost    = expensive.reduce((s, e) => s + realCostOf(e), 0);
-        // Benchmark routing savings rate: mini equivalents cost ~60% less for simple tasks
-        const routingRate      = 0.60;
-        const potentialSavings = expensiveCost * routingRate * 30;
-        const savingsPct       = Math.round(routingRate * 100);
+        // The old figure was expensiveCost * 0.60 * 30 — a benchmark rate we
+        // have not measured on this workload, projected as though the session
+        // were one day. Both parts were assumptions, so no number is published.
         const confidence       = Math.round((expensive.length / entries.length) * 100);
         const expensivePct     = waste.totalGrossSpend > 0
           ? parseFloat(((expensiveCost / waste.totalGrossSpend) * 100).toFixed(1))
           : null;
-        if (potentialSavings > 0.01) {
+        if (expensiveCost > 0) {
           recs.push({
             id: 'route_to_cheaper_models',
             title: 'Route simple tasks to smaller models',
-            description: `${expensive.length} of ${entries.length} requests (${expensivePct !== null ? expensivePct + '% of spend' : ''}) use premium models. Routing straightforward queries to GPT-4o Mini or Claude Haiku cuts those costs by ~${savingsPct}%.`,
-            estimatedMonthlySavings: potentialSavings,
+            description: `${expensive.length} of ${entries.length} requests${expensivePct !== null ? ` (${expensivePct}% of spend)` : ''} use premium models. Routing straightforward queries to a smaller model reduces that cost; how much depends on which model you move them to.`,
             confidence,
             difficulty: 'medium',
             timeToImplement: '1-2 hrs',
             category: 'routing',
-            savingsPct,
             observedCount: expensive.length,
             tokensPerRequest: null,
             percentOfSpend: expensivePct,
@@ -1019,7 +1020,9 @@ if (command === 'serve') {
       }
     }
 
-    return recs.sort((a, b) => b.estimatedMonthlySavings - a.estimatedMonthlySavings);
+    // Ordered by observed share of spend — the evidence we actually have —
+    // now that no recommendation carries a savings estimate.
+    return recs.sort((a, b) => (b.percentOfSpend ?? 0) - (a.percentOfSpend ?? 0));
   }
 
   function aggregateSessionAttribution(entries) {
@@ -1329,9 +1332,11 @@ if (command === 'serve') {
       const waste        = deriveWasteReport(entries);
       const recs         = buildRecommendations(waste, entries);
       const score        = computeOptimizationScore(waste);
-      const totalSavings = recs.reduce((s, r) => s + r.estimatedMonthlySavings, 0);
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ recommendations: recs, optimizationScore: score, totalPotentialSavings: totalSavings }));
+      // totalPotentialSavings deliberately absent — it was the sum of
+      // per-recommendation forecasts that are no longer estimated.
+      res.end(JSON.stringify({ recommendations: recs, optimizationScore: score,
+        recoveryEstimatesUnavailable: waste.recoveryEstimatesUnavailable ?? null }));
       return;
     }
 

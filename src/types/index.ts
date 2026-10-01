@@ -182,7 +182,11 @@ export interface WasteCategory {
   severity:               'critical' | 'warning' | 'info' | 'good';
   fix?:                   string;          // config key to apply
   fixDescription?:        string;          // what applying the fix does
-  projectedMonthlySaving?: number;         // estimated if fix applied
+  // Omitted while recovery estimation is withheld — see
+  // EnrichedWasteReport.recoveryEstimatesUnavailable. It was
+  // (category cost x a flat rate) x 30, i.e. it assumed the session was
+  // exactly one day of traffic. Absent means "not estimated", not "zero".
+  projectedMonthlySaving?: number;
 }
 
 /**
@@ -195,8 +199,15 @@ export interface EnrichedWasteReport {
   totalGrossSpend:     number;   // what you would have spent without any optimization
   alreadySaved:        number;   // what response cache already saved this session
   currentSpend:        number;   // what you actually spent
-  recoverableSpend:    number;   // additional recoverable with further optimization
-  recoverablePercent:  number;   // recoverableSpend / currentSpend
+  // Both omitted while recovery estimation is withheld. They were derived from
+  // flat per-category rates (tool schemas 0.90, history 0.65) that predate
+  // per-model cached-input pricing, and a 90% tool-schema figure is not
+  // evidence those schemas are unnecessary. Absent means "not estimated" —
+  // consumers must render that as unavailable, never as zero opportunity.
+  recoverableSpend?:   number;
+  recoverablePercent?: number;
+  // Present exactly when the two above are absent, carrying the reason.
+  recoveryEstimatesUnavailable?: string;
 
   categories: {
     unusedToolSchemas:  WasteCategory;  // tool defs sent when not used

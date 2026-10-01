@@ -192,8 +192,8 @@ describe('CLI reporting', () => {
     const entries = [entry({}), entry({}), entry({})]; // no caching anywhere
     const out = strip(renderReport({ entries, isPro: true }));
     expect(out).toMatch(/Provider-native caching on system prompt/);
-    expect(out).toMatch(/50% reduction/);   // gpt-4o-mini: $0.15 → $0.075
-    expect(out).not.toMatch(/90% reduction/);
+    expect(out).toMatch(/50% if cacheable/);   // gpt-4o-mini: $0.15 → $0.075
+    expect(out).not.toMatch(/90%/);
   });
 
   it('reports native caching from real discounts, never from eligibility', () => {
@@ -219,7 +219,7 @@ describe('CLI reporting', () => {
     ];
     const out = strip(renderReport({ entries, isPro: true }));
     expect(out).not.toMatch(/Provider-native caching on system prompt/);
-    expect(out).not.toMatch(/Recoverable here/);
+    expect(out).not.toMatch(/If fully cacheable/);
   });
 
   it('still recommends caching for a model that never once received a discount', () => {
@@ -228,7 +228,7 @@ describe('CLI reporting', () => {
     const entries = [entry({}), entry({}), entry({})];
     const out = strip(renderReport({ entries, isPro: true }));
     expect(out).toMatch(/Provider-native caching on system prompt/);
-    expect(out).toMatch(/Recoverable here/);
+    expect(out).toMatch(/If fully cacheable/);
   });
 
   it('never projects a session forward to a month', () => {
@@ -237,7 +237,7 @@ describe('CLI reporting', () => {
     const entries = [entry({}), entry({})];
     const out = strip(renderReport({ entries, isPro: true }));
     expect(out).not.toMatch(/monthly/i);
-    expect(out).toMatch(/Recoverable here/);
+    expect(out).toMatch(/If fully cacheable/);
     expect(out).toMatch(/across 2 requests/);
     expect(out).toMatch(/not projected/);
   });
@@ -267,7 +267,7 @@ describe('CLI reporting', () => {
     const allCached = entry({ nativeCachedTokens: 4736, nativeCache: true, realInputTokens: 166, realCost: 0.0004 });
     const out = strip(renderReport({ entries: [allCached, allCached, allCached], isPro: true }));
     expect(out).not.toMatch(/Provider-native caching on system prompt/);
-    expect(out).not.toMatch(/Recoverable here/);
+    expect(out).not.toMatch(/If fully cacheable/);
     expect(out).not.toMatch(/monthly/i);
   });
 
@@ -294,10 +294,17 @@ describe('CLI reporting', () => {
 
     const spend = Number(/Total Spend\s+\$([0-9.]+)/.exec(out)?.[1]);
     expect(spend).toBeGreaterThan(0);
-    // Every dollar figure anywhere in the report must be <= total spend.
-    const amounts = [...out.matchAll(/\$([0-9]+\.[0-9]+)/g)].map(m => Number(m[1]));
-    expect(amounts.length).toBeGreaterThan(1);
-    for (const a of amounts) expect(a).toBeLessThanOrEqual(spend + 1e-9);
+    // Scoped deliberately to waste-category costs. "Already saved" is NOT
+    // bounded by spend and must not be: a session of mostly response-cache
+    // hits legitimately saves more than the remaining live calls cost. An
+    // assertion over every dollar on the page would be wrong, not strict.
+    const bounded = [...out.matchAll(
+      /(?:Unused tool schemas|Redundant RAG chunks|Stale conversation history|Overpowered model|Tool schemas|System prompts|RAG chunks|Conv\. history)\s+\$([0-9]+\.[0-9]+)/g,
+    )].map(m => Number(m[1]));
+    expect(bounded.length).toBeGreaterThan(0);
+    for (const a of bounded) expect(a).toBeLessThanOrEqual(spend + 1e-9);
+    // And no separate recoverable total may be published at all.
+    expect(out).not.toMatch(/Recoverable this session/);
   });
 
   it('withholds recovery estimates rather than quoting unsupported ones', () => {
@@ -322,7 +329,7 @@ describe('CLI reporting', () => {
     expect(out).toMatch(/Unused tool schemas/);        // the category is shown
     expect(out).not.toMatch(/fix recovers/);           // ...without a dollar estimate
     expect(out).not.toMatch(/Recoverable this session/);
-    expect(out).toMatch(/recoverable is not yet/);     // and the gap is stated
+    expect(out).toMatch(/withheld pending sufficient evidence/); // gap stated
   });
 
   it('claims no caching saving for a provider that has no prompt cache', () => {

@@ -22,7 +22,11 @@ export default function OverviewPage() {
     );
   }
 
-  const { currentSpend, alreadySaved, totalGrossSpend, recoverableSpend, topFix, categories } = waste;
+  const { currentSpend, alreadySaved, totalGrossSpend, topFix, categories } = waste;
+  // recoverableSpend is no longer published — the API withholds it and sends a
+  // reason instead. Absent must never be treated as 0: that would read as
+  // "nothing to recover", i.e. the opposite of "not assessed".
+  const recoveryUnavailable: string | undefined = waste.recoveryEstimatesUnavailable;
 
   const savedPct    = totalGrossSpend > 0 ? Math.round((alreadySaved / totalGrossSpend) * 100) : 0;
   const cacheHits   = sessionLog?.filter(e => e.cached).length ?? 0;
@@ -30,7 +34,7 @@ export default function OverviewPage() {
 
   const grossForBar = totalGrossSpend || 1;
   const savedBarPct = (alreadySaved     / grossForBar) * 100;
-  const recBarPct   = (recoverableSpend / grossForBar) * 100;
+  const recBarPct   = 0; // recoverable share withheld — see recoveryUnavailable
   const baseBarPct  = Math.max(0, 100 - savedBarPct - recBarPct);
 
   const wasteOpportunities = categories.filter(c => c.severity !== 'good' && c.cost > 0).length;
@@ -104,11 +108,7 @@ export default function OverviewPage() {
                 <span className="w-2 h-2 rounded-full bg-green-500 inline-block" /> Saved
               </span>
             )}
-            {recoverableSpend > 0 && (
-              <span className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-amber-500 inline-block" /> Recoverable
-              </span>
-            )}
+
             <span className="flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-[#303030] inline-block" /> Efficient
             </span>
@@ -148,15 +148,19 @@ export default function OverviewPage() {
         </div>
       </div>
 
-      {/* ─── S3: Still Recoverable ── */}
-      {recoverableSpend > 0 && (
+      {/* ─── S3: Areas to review ──
+          Was "Still Recoverable $X". That figure was flat per-category rates
+          applied to estimated allocations and projected x30. What survives is
+          the count of areas worth looking at, which is an observation. */}
+      {wasteOpportunities > 0 && (
         <div className="rounded-xl border border-[#2a1e0a] bg-[#100c04] p-6 flex items-center justify-between">
           <div>
             <p className="text-xs text-[#d4a04a] uppercase tracking-widest font-medium mb-2">
-              Still Recoverable
+              Areas to review
             </p>
-            <p className="text-3xl font-bold font-mono text-amber-400 leading-none">
-              {usd(recoverableSpend)}
+            <p className="text-sm text-[#9a9a9a] leading-relaxed max-w-md">
+              Recoverable amounts are not estimated — see each area below for
+              what it costs and how many requests it was observed in.
             </p>
           </div>
           <div className="text-right">
@@ -164,7 +168,7 @@ export default function OverviewPage() {
               {wasteOpportunities}
             </p>
             <p className="text-xs text-[#7c7c7c] mt-1">
-              {wasteOpportunities === 1 ? 'opportunity' : 'opportunities'} found
+              {wasteOpportunities === 1 ? 'area' : 'areas'} to review
             </p>
           </div>
         </div>
@@ -182,11 +186,9 @@ export default function OverviewPage() {
           <p className="text-white font-semibold text-base mb-1.5">{topFix.label}</p>
           <p className="text-[#9a9a9a] text-sm leading-relaxed mb-4">{topFix.fixDescription}</p>
           <div className="flex items-center justify-between pt-3 border-t border-[#181818]">
-            <span className="text-xs text-[#7c7c7c]">Estimated saving</span>
-            <span className="text-green-400 font-mono font-semibold text-sm">
-              {topFix.projectedMonthlySaving != null && topFix.projectedMonthlySaving > 0
-                ? `${usd(topFix.projectedMonthlySaving)}/mo est.`
-                : `${usd(topFix.cost)} recoverable`}
+            <span className="text-xs text-[#7c7c7c]">Cost in this session</span>
+            <span className="text-white font-mono font-semibold text-sm">
+              {usd(topFix.cost)}
             </span>
           </div>
         </div>
