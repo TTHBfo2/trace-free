@@ -109,8 +109,12 @@ export default function OverviewPage() {
               </span>
             )}
 
+            {/* Was "Efficient". With the recoverable segment withheld, every
+                dollar that is not a recorded saving falls into this one — and
+                calling that efficient asserts something the withheld data
+                cannot support. It is simply what was spent. */}
             <span className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-[#303030] inline-block" /> Efficient
+              <span className="w-2 h-2 rounded-full bg-[#303030] inline-block" /> Spent
             </span>
           </div>
         </div>
