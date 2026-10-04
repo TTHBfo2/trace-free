@@ -673,8 +673,8 @@ if (command === 'serve') {
   };
 
   const { createServer }                          = await import('http');
-  const { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, statSync } = await import('fs');
-  const { join, resolve, extname, basename }      = await import('path');
+  const { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, statSync, realpathSync } = await import('fs');
+  const { join, resolve, extname, basename, sep } = await import('path');
   const { homedir }                               = await import('os');
   const { fileURLToPath }                         = await import('url');
   const { exec }                                  = await import('child_process');
@@ -1129,14 +1129,105 @@ if (command === 'serve') {
     return entries.filter(e => e.labels?.project === project);
   }
 
+  const TRUSTED_ORIGINS  = new Set([`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`]);
+  const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+  const ALLOWED_HOSTS    = new Set([
+    `localhost:${PORT}`, `127.0.0.1:${PORT}`, `[::1]:${PORT}`,
+    'localhost', '127.0.0.1', '[::1]',
+  ]);
+
+  // A project path supplied by the client must be either this server's own
+  // directory or one already in the registry — never an arbitrary path. The
+  // Developer build has had this; the free build did not, so a crafted
+  // ?projectPath= could point the reader at any directory on the machine.
+  // realpathSync on both sides so a registered path later replaced by a
+  // symlink is compared by what it resolves to now.
+  function isAllowedProjectPath(candidatePath) {
+    let real;
+    try { real = realpathSync(resolve(candidatePath)); } catch { return false; }
+    try { if (real === realpathSync(process.cwd())) return true; } catch { /* ignore */ }
+    return readProjectRegistry().some(p => {
+      try { return realpathSync(resolve(p.path)) === real; } catch { return false; }
+    });
+  }
+
+  // Every request body this server accepts is a small JSON control message;
+  // none legitimately exceeds a few KB. Without a cap, a client could stream
+  // unbounded data into a string and then JSON.parse it. 64 KiB matches the
+  // limit the licensing Worker already enforces and tests.
+  const MAX_BODY_BYTES = 64 * 1024;
+  function readBody(req, res, onDone) {
+    let body = '';
+    let bytes = 0;
+    let aborted = false;
+    let drained = 0;
+    const DRAIN_CHUNK_CEILING = 256; // ~16 MB at Node's default chunk size
+    req.on('data', chunk => {
+      if (aborted) return;
+      bytes += chunk.length;
+      if (bytes > MAX_BODY_BYTES) {
+        aborted = true;
+        // Tell the client to stop, and ask Node to close the connection after
+        // this response — NOT req.destroy() here. Destroying the socket
+        // immediately raced the response out the door: repeated attempts gave
+        // an even mix of 413 and ECONNRESET. Pausing the request stops us
+        // buffering more while the 413 flushes.
+        res.writeHead(413, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: false, error: 'Request body too large' }));
+        // Answer, then DRAIN rather than destroy. Tearing the socket down
+        // mid-upload raced the 413 out the door — repeated single-shot posts
+        // gave a mix of 413 and ECONNRESET, and a chunked upload reset every
+        // time, because the client was still writing into a closed socket.
+        // Draining discards without buffering, so memory stays bounded and
+        // the client reliably reads the 413. A client that keeps streaming
+        // far past the limit is cut off by the ceiling below.
+        req.on('data', () => {
+          drained += 1;
+          if (drained > DRAIN_CHUNK_CEILING) { try { req.destroy(); } catch { /* gone */ } }
+        });
+        req.resume();
+        return;
+      }
+      body += chunk;
+    });
+    req.on('end', () => { if (!aborted) onDone(body); });
+  }
   function handleRequest(req, res) {
     res.setHeader('Access-Control-Allow-Origin', `http://localhost:${PORT}`);
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
+    // Host allowlist: a browser pointed at a name that resolves to 127.0.0.1
+    // (DNS rebinding) would otherwise reach this server with the attacker's
+    // page as the origin of the request. No end-to-end rebinding attack was
+    // demonstrated here — this closes the door regardless, at no cost to a
+    // real localhost user.
+    const hostHeader = (req.headers.host || '').toLowerCase();
+    if (hostHeader && !ALLOWED_HOSTS.has(hostHeader)) {
+      res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, error: 'Unrecognized Host header' }));
+      return;
+    }
+
+    // Reject state-changing requests carrying a foreign Origin. Without this,
+    // any page the user had open could POST /api/clear and archive their
+    // session — confirmed by probe: an "https://evil.example" Origin returned
+    // 200 and cleared a fixture. The Developer build already rejected it 403.
+    if (MUTATING_METHODS.has(req.method) && req.headers.origin && !TRUSTED_ORIGINS.has(req.headers.origin)) {
+      res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, error: 'Cross-origin request rejected' }));
+      return;
+    }
 
     const qs          = new URL(req.url, 'http://localhost').searchParams;
     const project     = qs.get('project')     || null;
     const projectPath = qs.get('projectPath') || null;
     const urlPath     = req.url.split('?')[0];
+
+    if (projectPath && projectPath !== 'all' && !isAllowedProjectPath(projectPath)) {
+      res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, error: 'Unknown project path' }));
+      return;
+    }
 
     // ── Projects list (registry-aware) ──────────────────────────────────────────
     if (urlPath === '/api/projects') {
@@ -1161,9 +1252,7 @@ if (command === 'serve') {
 
     // ── Add project ──────────────────────────────────────────────────────────────
     if (req.method === 'POST' && urlPath === '/api/projects/add') {
-      let body = '';
-      req.on('data', chunk => { body += chunk; });
-      req.on('end', () => {
+      readBody(req, res, (body) => {
         try {
           const { path: rawPath, name: rawName } = JSON.parse(body);
           const abs  = resolve(rawPath);
@@ -1183,9 +1272,7 @@ if (command === 'serve') {
 
     // ── Remove project ───────────────────────────────────────────────────────────
     if (req.method === 'POST' && urlPath === '/api/projects/remove') {
-      let body = '';
-      req.on('data', chunk => { body += chunk; });
-      req.on('end', () => {
+      readBody(req, res, (body) => {
         try {
           const { path: rawPath } = JSON.parse(body);
           const abs = resolve(rawPath);
@@ -1383,12 +1470,31 @@ if (command === 'serve') {
       return;
     }
 
+    // Resolves both sides and compares with the platform separator appended,
+    // so "/ui-backup" can't pass as a child of "/ui". realpathSync collapses
+    // symlinks, so a link planted inside ui/ can't point out of it; if the
+    // path doesn't exist yet, fall back to the lexical resolve, which is
+    // enough to reject traversal (the read then 404s as a missing file).
+    const insideUiDir = (candidate) => {
+      const root = (() => { try { return realpathSync(UI_DIR); } catch { return resolve(UI_DIR); } })();
+      let real;
+      try { real = realpathSync(candidate); } catch { real = resolve(candidate); }
+      return real === root || real.startsWith(root.endsWith(sep) ? root : root + sep);
+    };
+
     if (!existsSync(UI_DIR)) {
       res.writeHead(503, { 'Content-Type': 'text/plain' });
       res.end('Dashboard UI not bundled. Run: npm run build in trimwares-dashboard.');
       return;
     }
 
+    // CONTAINMENT. urlPath is req.url verbatim, so "/../SENTINEL.txt" or
+    // "/..\SENTINEL.txt" reaches here intact and join() happily resolves the
+    // "..", handing back a file outside the bundled UI. Confirmed by probe:
+    // HTTP 200 with the contents of a file five directories up. The server is
+    // localhost-only, which limits who can ask — it does not make the answer
+    // correct. Every candidate below is checked with insideUiDir() before it
+    // is read.
     let   filePath = join(UI_DIR, urlPath);
     // No file extension → could be a directory route (e.g. /attribution/)
     // Always resolve to index.html for extensionless paths
@@ -1402,6 +1508,14 @@ if (command === 'serve') {
     //   /<route>/__next.<segment>/__PAGE__.txt        (nested dir)
     // On a dumb static host that's a 404 per navigation and the client
     // degrades to the full payload. We're not a dumb host — map it.
+    if (!insideUiDir(filePath)) {
+      // Traversal attempt: answer exactly like a missing file, so probing
+      // cannot distinguish "outside the root" from "not there".
+      res.writeHead(404, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
+      res.end('Not found');
+      return;
+    }
+
     if (!existsSync(filePath)) {
       const m = basename(filePath).match(/^(__next\..+)\.(__PAGE__\.txt)$/);
       if (m) {
@@ -1418,6 +1532,16 @@ if (command === 'serve') {
     // upgrade of the package regenerates those hashes, so this hit real
     // users on every version bump.
     if (!existsSync(filePath)) {
+      res.writeHead(404, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
+      res.end('Not found');
+      return;
+    }
+
+    // Re-checked here because filePath is reassigned above (the segment-
+    // prefetch remap). Both reassignments derive from an already-contained
+    // path, so this is belt-and-braces — but the read is the thing that
+    // actually discloses a file, so the guard belongs immediately before it.
+    if (!insideUiDir(filePath)) {
       res.writeHead(404, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
       res.end('Not found');
       return;

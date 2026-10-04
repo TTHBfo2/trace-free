@@ -155,3 +155,111 @@ test.describe('free dashboard', () => {
     expect(stale.headers()['content-type']).not.toContain('text/html');
   });
 });
+
+// ─── Request boundary hardening ──────────────────────────────────────────────
+// Each was a confirmed, reproducible defect found in review and probed with a
+// sentinel file before being fixed. Free lacked the origin and project-path
+// guards the Developer build already had.
+
+
+test('a cross-origin clear is rejected and leaves the session intact', async ({ request }) => {
+  // Confirmed: an "https://evil.example" Origin returned 200 and archived a
+  // fixture's session. Any page the user had open could have done this.
+  const before = await (await request.get('/api/data')).json();
+  const r = await request.post('/api/clear', { headers: { Origin: 'https://evil.example' } });
+  expect(r.status()).toBe(403);
+  const after = await (await request.get('/api/data')).json();
+  expect(after.entryCount, 'session must survive the rejected request').toBe(before.entryCount);
+});
+
+test('an unrecognized Host header is rejected', async ({ request }) => {
+  const r = await request.get('/api/data', { headers: { Host: 'evil.example' } });
+  expect(r.status()).toBe(403);
+});
+
+test('an unregistered projectPath is rejected', async ({ request }) => {
+  const r = await request.get('/api/data?projectPath=C:/Windows');
+  expect(r.status()).toBe(403);
+});
+
+
+// ─── Path containment, probed over raw HTTP ──────────────────────────────────
+// Playwright's request client NORMALIZES the URL before it hits the wire:
+// supplying "/../package.json" sends "/package.json". Verified with an echo
+// server. So an assertion written through Playwright can pass without ever
+// testing containment. These use node:http with an explicit raw `path`, and a
+// sentinel file placed outside the UI directory, so a regression is caught by
+// the file's contents coming back rather than by a status code alone.
+import http from 'node:http';
+import { writeFileSync, unlinkSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+
+const SENTINEL_BODY = 'TRAVERSAL-SENTINEL-MUST-NOT-BE-SERVED';
+// bin/trimwares.js serves from <pkg>/ui, so <pkg>/ is one level outside it.
+const SENTINEL_FILE = join(process.cwd(), '.traversal-sentinel.txt');
+
+function rawGet(baseURL: string, rawPath: string): Promise<{ status: number; body: string }> {
+  const u = new URL(baseURL);
+  return new Promise(resolve => {
+    const req = http.request(
+      { host: u.hostname, port: u.port, method: 'GET', path: rawPath },
+      res => {
+        let b = '';
+        res.on('data', c => { b += c; });
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body: b }));
+      },
+    );
+    req.on('error', e => resolve({ status: -1, body: String(e) }));
+    req.end();
+  });
+}
+
+test('a raw traversal path cannot read a file outside the UI directory', async ({ baseURL }) => {
+  writeFileSync(SENTINEL_FILE, SENTINEL_BODY);
+  try {
+    for (const rawPath of [
+      '/../.traversal-sentinel.txt',
+      '/..%2f.traversal-sentinel.txt',
+      '/..\.traversal-sentinel.txt',
+      '/ui/../../.traversal-sentinel.txt',
+      '/subdir/../../.traversal-sentinel.txt',
+    ]) {
+      const r = await rawGet(baseURL!, rawPath);
+      expect(r.body, `sentinel leaked via ${rawPath}`).not.toContain(SENTINEL_BODY);
+      expect(r.status, `traversal must 404: ${rawPath}`).toBe(404);
+    }
+  } finally {
+    if (existsSync(SENTINEL_FILE)) unlinkSync(SENTINEL_FILE);
+  }
+});
+
+test('an oversized body is refused with 413, repeatably and when chunked', async ({ baseURL }) => {
+  // The first implementation called req.destroy() the moment the cap was hit,
+  // which could close the socket before the 413 reached the client — observed
+  // as an even mix of 413s and ECONNRESETs across repeated attempts.
+  const u = new URL(baseURL!);
+  const post = (chunked: boolean) => new Promise<number | string>(resolve => {
+    const req = http.request(
+      { host: u.hostname, port: u.port, method: 'POST', path: '/api/projects/add',
+        headers: { 'Content-Type': 'application/json' } },
+      res => { res.resume(); res.on('end', () => resolve(res.statusCode ?? 0)); },
+    );
+    req.on('error', e => resolve('ERR:' + (e as NodeJS.ErrnoException).code));
+    if (chunked) {
+      let sent = 0;
+      const tick = () => {
+        if (sent >= 160 * 1024) { req.end(); return; }
+        sent += 16 * 1024;
+        if (req.write('x'.repeat(16 * 1024))) setTimeout(tick, 5); else req.once('drain', tick);
+      };
+      tick();
+    } else {
+      req.end('x'.repeat(160 * 1024));
+    }
+  });
+
+  for (let i = 0; i < 4; i++) {
+    expect(await post(false), `single-shot attempt ${i + 1}`).toBe(413);
+  }
+  expect(await post(true), 'chunked upload').toBe(413);
+});

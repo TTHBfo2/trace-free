@@ -42,7 +42,9 @@ Credit Card: ${PII_MARKERS.card}
 Medical Record: Patient presents with hypertension. Prescribed lisinopril 10mg.
 `;
 
-function getSessionLogContent(dir = '.trimwares'): string {
+// jest.setup.cjs points SessionLog at .trimwares-test-<worker>; this must
+// read the same place. Its old default was the REAL '.trimwares'.
+function getSessionLogContent(dir = process.env.TRIMWARES_LOG_DIR ?? '.trimwares-test-0'): string {
   const path = `${dir}/session.jsonl`;
   if (!existsSync(path)) return '';
   return readFileSync(path, 'utf8');
@@ -64,11 +66,14 @@ describe('Security audit — no PII in any output', () => {
   });
 
   afterEach(() => {
-    const path = '.trimwares/session.jsonl';
-    if (existsSync(path)) {
-      // Don't delete in production — but clean up test artifacts
-      try { unlinkSync(path); } catch { /* ok */ }
-    }
+    // Was hardcoded to '.trimwares/session.jsonl' — the REAL log, a directory
+    // these tests never write to (jest.setup.cjs redirects writes to
+    // .trimwares-test-<worker>). Running the suite in a project that had a
+    // session deleted it. Only ever remove the test-owned file.
+    const dir = process.env.TRIMWARES_LOG_DIR;
+    if (!dir || !dir.startsWith('.trimwares-test')) return;
+    const path = `${dir}/session.jsonl`;
+    if (existsSync(path)) { try { unlinkSync(path); } catch { /* ok */ } }
   });
 
   it('session buffer contains zero PII after a request with sensitive content', async () => {
@@ -84,6 +89,20 @@ describe('Security audit — no PII in any output', () => {
     if (found) {
       console.error('PII found in session buffer:', markers);
     }
+  });
+
+  it('the on-disk session log contains zero PII', async () => {
+    // The file-reading helper existed but was never called, so the header's
+    // claim to verify ".trimwares/session.jsonl" was not backed by any
+    // assertion. It is now — against the test-owned log.
+    await trimmer.chat({ messages: SENSITIVE_MESSAGES });
+    await new Promise(r => setTimeout(r, 150)); // let the async write land
+
+    const onDisk = getSessionLogContent();
+    expect(onDisk.length).toBeGreaterThan(0); // proves we read a real file
+    const { found, markers } = containsAnyPii(onDisk);
+    expect(found).toBe(false);
+    if (found) console.error('PII found in on-disk session log:', markers);
   });
 
   it('cost report contains zero PII', async () => {
