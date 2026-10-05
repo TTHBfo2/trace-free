@@ -263,3 +263,38 @@ test('an oversized body is refused with 413, repeatably and when chunked', async
   }
   expect(await post(true), 'chunked upload').toBe(413);
 });
+
+// ─── Canonical page URLs (trailingSlash: true) ───────────────────────────────
+// Same next.config as the Developer build, where serving the slash-less form
+// directly caused React #418 on every direct page load — reproduced 11 of 11
+// there, and fixed by redirecting to the canonical URL.
+const EXPORTED_PAGES = ['/attribution', '/models', '/recommendations', '/settings'];
+
+test('page URLs without a trailing slash redirect to the canonical form', async ({ request }) => {
+  for (const p of EXPORTED_PAGES) {
+    const r = await request.get(p, { maxRedirects: 0 });
+    expect(r.status(), `${p} should redirect`).toBe(308);
+    expect(r.headers()['location'], `${p} location`).toBe(p + '/');
+  }
+});
+
+test('the redirect preserves the query string and leaves API, assets and traversal alone', async ({ request }) => {
+  expect((await request.get('/attribution?project=x', { maxRedirects: 0 })).headers()['location'])
+    .toBe('/attribution/?project=x');
+  expect((await request.get('/', { maxRedirects: 0 })).status()).toBe(200);
+  expect((await request.get('/attribution/', { maxRedirects: 0 })).status()).toBe(200);
+  expect((await request.get('/api/data', { maxRedirects: 0 })).status()).toBe(200);
+  expect((await request.get('/_next/static/chunks/nope-0000.js', { maxRedirects: 0 })).status()).toBe(404);
+});
+
+test('loading a page directly produces no hydration error', async ({ page }) => {
+  for (const p of ['/', ...EXPORTED_PAGES]) {
+    const errors: string[] = [];
+    page.on('pageerror', e => errors.push(String(e.message ?? e)));
+    await page.goto(p, { waitUntil: 'domcontentloaded' });
+    await page.locator('main').waitFor();
+    await page.waitForTimeout(2000);
+    expect(errors.filter(e => /errors\/4\d\d/.test(e)), `hydration error on ${p}`).toEqual([]);
+    page.removeAllListeners('pageerror');
+  }
+});

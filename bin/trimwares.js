@@ -1500,6 +1500,24 @@ if (command === 'serve') {
     // Always resolve to index.html for extensionless paths
     if (!extname(urlPath) || urlPath === '/') {
       const idx = join(UI_DIR, urlPath.replace(/\/?$/, ''), 'index.html');
+      // The dashboard is exported with trailingSlash: true, so "/attribution/"
+      // is the canonical URL. Serving "/attribution" directly hands the client
+      // router a path it does not consider canonical, and hydration fails:
+      // React #418 on every slash-less page load and never on the slash-ended
+      // one — reproduced 11 of 11 on the Developer build across both forms of
+      // five routes, with API responses blocked, so it was never about data
+      // arriving early. Same next.config here, same fix.
+      // 308 preserves method and body; the query string is carried over.
+      // Only for real exported pages: "/" is already canonical, /api/* never
+      // reaches here, extensions are assets, and anything not resolving to an
+      // exported page falls through to the 404 path below — so traversal is
+      // still rejected rather than redirected.
+      if (urlPath !== '/' && !urlPath.endsWith('/') && existsSync(idx) && insideUiDir(idx)) {
+        const qs = req.url.slice(urlPath.length); // '' or '?a=b'
+        res.writeHead(308, { Location: urlPath + '/' + qs, 'Cache-Control': 'no-store' });
+        res.end();
+        return;
+      }
       filePath = existsSync(idx) ? idx : join(UI_DIR, 'index.html');
     }
     // Next 16's client prefetches per-segment RSC payloads at
