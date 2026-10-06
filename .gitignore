@@ -22,6 +22,7 @@ scripts/*
 !scripts/verify-embeddings.mjs
 !scripts/release-gate.mjs
 !scripts/build.mjs
+!scripts/lint-dashboard.mjs
 
 NOTES.md
 CONSULTANT-SUMMARY.md

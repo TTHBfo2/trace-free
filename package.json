@@ -44,7 +44,7 @@
     "release:gate": "node scripts/release-gate.mjs",
     "prepublishOnly": "npm run lint && npm test && npm run build && npm run build:ui && npm run test:e2e && npm run release:gate",
     "test:e2e": "playwright test",
-    "lint:dashboard": "npm --prefix trimwares-dashboard run lint"
+    "lint:dashboard": "node scripts/lint-dashboard.mjs"
   },
   "keywords": [
     "llm",
