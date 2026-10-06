@@ -36,14 +36,15 @@
     "test": "node --experimental-vm-modules node_modules/jest-cli/bin/jest.js --config jest.config.cjs --passWithNoTests",
     "test:watch": "node --experimental-vm-modules node_modules/jest-cli/bin/jest.js --config jest.config.cjs --watch",
     "test:coverage": "node --experimental-vm-modules node_modules/jest-cli/bin/jest.js --config jest.config.cjs --coverage --passWithNoTests",
-    "lint": "eslint src --ext .ts",
+    "lint": "eslint src --ext .ts && npm run lint:dashboard",
     "lint:fix": "eslint src --ext .ts --fix",
     "type-check": "tsc --noEmit",
     "postinstall": "node bin/postinstall.js",
     "verify:embeddings": "node scripts/verify-embeddings.mjs",
     "release:gate": "node scripts/release-gate.mjs",
     "prepublishOnly": "npm run lint && npm test && npm run build && npm run build:ui && npm run test:e2e && npm run release:gate",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "lint:dashboard": "npm --prefix trimwares-dashboard run lint"
   },
   "keywords": [
     "llm",

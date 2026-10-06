@@ -162,9 +162,12 @@ export default function OverviewPage() {
             <p className="text-xs text-[#d4a04a] uppercase tracking-widest font-medium mb-2">
               Areas to review
             </p>
+            {/* The server sends the reason alongside the withheld figures, so
+                the explanation shown here stays in step with the policy that
+                produced it rather than being restated independently. */}
             <p className="text-sm text-[#9a9a9a] leading-relaxed max-w-md">
-              Recoverable amounts are not estimated — see each area below for
-              what it costs and how many requests it was observed in.
+              {recoveryUnavailable ??
+                'Recoverable amounts are not estimated — see each area below for what it costs and how many requests it was observed in.'}
             </p>
           </div>
           <div className="text-right">
