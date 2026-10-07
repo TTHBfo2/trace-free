@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.5.5] — 2026-09-28
+## [1.5.5] — 2026-10-07
 
 ### Fixed — OpenAI prompt caching was never recorded
 
