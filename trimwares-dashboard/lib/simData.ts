@@ -108,6 +108,16 @@ export interface DerivedWasteReport {
   sessionRequests:    number;
 }
 
+// DEAD AT RUNTIME — nothing imports this function. Only the types in this file
+// are imported (`import type`, by the attribution components). The real waste
+// report is built server-side in bin/trimwares.js, which withholds recovery
+// amounts entirely.
+//
+// Do not revive this as-is. The `projectedMonthlySaving: recoverable * 30`
+// lines below assume a session is exactly one day of traffic, and the flat
+// per-category recovery rates predate per-model cached-input pricing (50% on
+// gpt-4o/4o-mini, 75% on gpt-4.1/4.1-mini, ~90% on Anthropic reads). Both are
+// the bugs the 1.5.5 advice-layer pass removed from every surface a user sees.
 export function deriveWasteReport(entries: SessionEntry[]): DerivedWasteReport {
   if (entries.length === 0) {
     return { totalGrossSpend: 0, alreadySaved: 0, currentSpend: 0, categories: [], topFix: null, sessionRequests: 0 };
