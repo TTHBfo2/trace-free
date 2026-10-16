@@ -36,7 +36,22 @@ const DEFAULT_PRICING: Record<string, ModelPricing> = {
   'gemini-1.5-pro':       { inputPerMillion: 1.25,  outputPerMillion: 5.00  },
   'gemini-1.5-flash':     { inputPerMillion: 0.075, outputPerMillion: 0.30  },
   'gemini-2.0-flash':     { inputPerMillion: 0.10,  outputPerMillion: 0.40  },
-  // Groq
+  // Groq. Verified against https://console.groq.com/docs/model/<id> 2026-10-14.
+  //
+  // Groq DOES have a prompt cache: automatic, no code changes, no extra fee,
+  // 50% off cached input, minimum cacheable prefix 128–1024 tokens depending on
+  // the model, reported in the OpenAI-compatible
+  // `usage.prompt_tokens_details.cached_tokens`. It is currently limited to the
+  // GPT-OSS family, which is why only those carry a cachedInputPerMillion.
+  // See https://console.groq.com/docs/prompt-caching — an earlier changelog of
+  // ours claimed Groq had no prompt cache at all. That was wrong.
+  //
+  // Keys are the bare model id; Groq reports these prefixed, as
+  // `openai/gpt-oss-20b`, which getPricing's substring match resolves. Longest
+  // key wins, so `gpt-oss-120b` is matched before `gpt-oss-20b`.
+  'gpt-oss-safeguard-20b':   { inputPerMillion: 0.075, outputPerMillion: 0.30, cachedInputPerMillion: 0.037 },
+  'gpt-oss-120b':            { inputPerMillion: 0.15,  outputPerMillion: 0.60, cachedInputPerMillion: 0.075 },
+  'gpt-oss-20b':             { inputPerMillion: 0.075, outputPerMillion: 0.30, cachedInputPerMillion: 0.037 },
   'llama-3.3-70b-versatile': { inputPerMillion: 0.59, outputPerMillion: 0.79 },
   'llama-3.1-8b-instant':    { inputPerMillion: 0.05, outputPerMillion: 0.08 },
   'mixtral-8x7b-32768':      { inputPerMillion: 0.24, outputPerMillion: 0.24 },
@@ -49,6 +64,7 @@ export class CostEngine {
   private pricing: Record<string, ModelPricing>;
   private wasteDetector: WasteDetector;
   private sessionStart = Date.now();
+  private unpriced = new Set<string>();
 
   constructor(
     pricingOverrides: Partial<Record<string, ModelPricing>> = {},
@@ -122,7 +138,21 @@ export class CostEngine {
       if (normalized.includes(key) || key.includes(normalized)) return this.pricing[key];
     }
 
-    return this.pricing['gpt-4o'] ?? { inputPerMillion: 2.50, outputPerMillion: 10.00 };
+    // Unknown model. The rate below is GPT-4o's and is almost certainly wrong
+    // for whatever this is, so mark it and remember the model name: callers
+    // that display money are expected to disclose both. Silently presenting
+    // this as the model's rate is how a Groq session came out 33x high.
+    this.unpriced.add(model);
+    const base = this.pricing['gpt-4o'] ?? { inputPerMillion: 2.50, outputPerMillion: 10.00 };
+    return { ...base, estimated: true };
+  }
+
+  /**
+   * Models seen this session that have no published rate, so their costs came
+   * from the fallback. Empty is the normal case.
+   */
+  getUnpricedModels(): string[] {
+    return [...this.unpriced];
   }
 
   computeCost(inputTokens: number, outputTokens: number, pricing: ModelPricing, cachedTokens = 0): number {

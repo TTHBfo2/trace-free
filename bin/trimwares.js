@@ -39,56 +39,57 @@ async function verifySignedToken(tokenStr) {
   }
 }
 
+// ─── User-level state (config, machine-id, registry) ────────────────────────
+//
+// All of this used to live here as nine repeated `join(homedir(), '.trimwares')`
+// sites and bare writeFileSync calls. A bare writeFileSync opens with 'w',
+// truncating the destination before writing a byte, so a process killed in
+// that window leaves an empty file — which is how a config.json reached 0
+// bytes and took an activation with it. Read-modify-write without a lock also
+// loses updates outright: measured, 1 of 8 concurrent registry appends
+// survived.
+//
+// It now lives in dist/state/UserState.js, which owns the cross-process lock
+// and the atomic replace, and is unit-tested directly in
+// tests/integration/stateDurability.test.ts — including a controlled
+// interruption and genuinely concurrent processes.
+//
+// These stay `async` only so the call sites below need no changes; the
+// underlying operations are synchronous by design, because the lock must not
+// be held across a network round-trip.
+const _state = await import('../dist/state/UserState.js');
+
+const stateDir             = async () => _state.stateDir();
+const configPath           = async () => _state.configPath();
+const writeFileAtomic      = async (f, c) => _state.writeFileAtomic(f, c);
+const readConfigState      = async () => _state.readConfig();
+const configProblemMessage = (res) => _state.configProblemMessage(res);
+const loadConfig           = async () => { const r = _state.readConfig(); return r.state === 'ok' ? r.config : null; };
+const saveConfig           = async (data) => _state.saveConfig(data);
+const loadProjectRegistry  = async () => _state.readRegistry();
+const saveProjectRegistry  = async (projects) => _state.mutateRegistry(() => projects);
+
+// getMachineId previously minted a fresh UUID over a blank file and said
+// nothing. That does not recover the old identity, and the licence server sees
+// a new device — so the module reports it and we tell the user here rather
+// than silently consuming one of their three slots.
 async function getMachineId() {
-  const { existsSync, readFileSync, writeFileSync, mkdirSync } = await import('fs');
-  const { join }    = await import('path');
-  const { homedir } = await import('os');
-  const dir  = join(homedir(), '.trimwares');
-  const path = join(dir, 'machine-id');
-  if (existsSync(path)) return readFileSync(path, 'utf8').trim();
-  const { randomUUID } = await import('crypto');
-  const id = randomUUID();
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(path, id, 'utf8');
-  return id;
+  const res = _state.getMachineId();
+  if (res.recovered) {
+    console.error('\n  \x1b[33m⚠  This machine\'s identity file was blank and has been regenerated.\x1b[0m');
+    console.error('  The previous identity cannot be recovered, so re-activating may use');
+    console.error('  another of your device slots. Run \x1b[33mnpx trimwares deactivate\x1b[0m on the old');
+    console.error('  machine, or contact hello@trimwares.com if you run out.\n');
+  }
+  return res.id;
 }
 
-async function loadConfig() {
-  const { existsSync, readFileSync } = await import('fs');
-  const { join }    = await import('path');
-  const { homedir } = await import('os');
-  const configPath  = join(homedir(), '.trimwares', 'config.json');
-  if (!existsSync(configPath)) return null;
-  try { return JSON.parse(readFileSync(configPath, 'utf8')); } catch { return null; }
-}
-
-async function saveConfig(data) {
-  const { writeFileSync, mkdirSync } = await import('fs');
-  const { join }    = await import('path');
-  const { homedir } = await import('os');
-  const dir  = join(homedir(), '.trimwares');
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'config.json'), JSON.stringify(data, null, 2));
-}
-
-// ─── Project registry ─────────────────────────────────────────────────────────
-
-async function loadProjectRegistry() {
-  const { existsSync, readFileSync } = await import('fs');
-  const { join }    = await import('path');
-  const { homedir } = await import('os');
-  const p = join(homedir(), '.trimwares', 'projects.json');
-  if (!existsSync(p)) return [];
-  try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return []; }
-}
-
-async function saveProjectRegistry(projects) {
-  const { writeFileSync, mkdirSync } = await import('fs');
-  const { join }    = await import('path');
-  const { homedir } = await import('os');
-  const dir = join(homedir(), '.trimwares');
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'projects.json'), JSON.stringify(projects, null, 2));
+// Compare-and-swap for the background refresh. The comparison happens INSIDE
+// the state lock in the module: comparing and then writing without a lock
+// still loses to a `login` or `deactivate` that commits in between, which
+// could resurrect a token the user had just logged out of.
+async function saveRefreshedToken(expectedToken, newToken) {
+  return _state.updateActivationToken(expectedToken, newToken) === 'committed';
 }
 
 // Returns: new token string on success, 'server_rejected' if Worker explicitly denied (4xx), null if offline/unreachable
@@ -110,7 +111,17 @@ async function tryRefreshToken(activationToken, machineId) {
 }
 
 async function requireProLicense(feature = 'This feature') {
-  const config = await loadConfig();
+  // Say so plainly when the config exists but is empty, corrupt or unreadable.
+  // Falling through to the "not activated" path told a paying customer whose
+  // config had just been truncated that they needed to buy a license.
+  const configState = await readConfigState();
+  const problem = configProblemMessage(configState);
+  if (problem) {
+    console.error(`\n  \x1b[31m✗ ${feature} needs an activated license, and your license config could not be used.\x1b[0m`);
+    console.error(`  ${problem}\n`);
+    process.exit(1);
+  }
+  const config = configState.state === 'ok' ? configState.config : null;
 
   // ── New flow: check activation token ────────────────────────────────────────
   if (config?.activationToken) {
@@ -135,7 +146,7 @@ async function requireProLicense(feature = 'This feature') {
           console.error('  Renew at \x1b[36mtrimwares.com/trace\x1b[0m\n');
           process.exit(1);
         } else if (newToken) {
-          await saveConfig({ ...config, activationToken: newToken });
+          await saveRefreshedToken(config.activationToken, newToken);
         } else {
           console.error('\n  \x1b[33m⚠  Could not refresh license token (offline?)\x1b[0m');
           console.error('  Running on grace period. Connect to the internet and restart.\n');
@@ -149,7 +160,7 @@ async function requireProLicense(feature = 'This feature') {
           console.error('  Renew at \x1b[36mtrimwares.com/trace\x1b[0m\n');
           process.exit(1);
         } else if (finalToken) {
-          await saveConfig({ ...config, activationToken: finalToken });
+          await saveRefreshedToken(config.activationToken, finalToken);
         } else {
           // Truly offline and beyond grace — fail open to avoid locking out users with no internet
           console.error('\n  \x1b[33m⚠  License token expired and could not be refreshed (offline?)\x1b[0m');
@@ -158,10 +169,19 @@ async function requireProLicense(feature = 'This feature') {
         }
       }
     } else if (exp - now < 7 * 86400) {
-      // Near expiry — refresh silently in background (only save if not rejected)
+      // Near expiry — refresh silently in the background.
+      //
+      // This is fire-and-forget, so the write can land long after startup and
+      // the process may be killed mid-write. That combination is what emptied
+      // a live config.json. Two things make it safe now: writeFileAtomic means
+      // a death mid-write leaves the old file whole, and saveRefreshedToken
+      // re-reads first so a refresh that lost a race to `login` or
+      // `deactivate` is dropped instead of resurrecting a stale token.
       getMachineId().then(machineId =>
         tryRefreshToken(config.activationToken, machineId).then(newToken => {
-          if (newToken && newToken !== 'server_rejected') saveConfig({ ...config, activationToken: newToken });
+          if (newToken && newToken !== 'server_rejected') {
+            return saveRefreshedToken(config.activationToken, newToken);
+          }
         }),
       ).catch(() => {});
     }
@@ -418,12 +438,19 @@ if (command === 'deactivate') {
     console.error('  Your local license has been removed anyway.\n');
   }
 
-  // Always clear local config regardless of network outcome
-  const { existsSync, unlinkSync } = await import('fs');
-  const { join } = await import('path');
-  const { homedir } = await import('os');
-  const configPath = join(homedir(), '.trimwares', 'config.json');
-  if (existsSync(configPath)) unlinkSync(configPath);
+  // Clear the local config regardless of network outcome — but only if it is
+  // still the activation we just deactivated. The fetch above can take ten
+  // seconds, and a `login` completing inside that window leaves a NEWER token
+  // on disk; deleting unconditionally would log the user out of the licence
+  // they just activated. Compare-and-delete, under the state lock.
+  const outcome = _state.deleteConfigIfToken(cfg.activationToken);
+  if (outcome === 'superseded') {
+    console.log('\n  \x1b[33m⚠  This device was deactivated on the server, but a newer');
+    console.log('  activation appeared locally while that was in flight, so your');
+    console.log('  local license file was left alone.\x1b[0m');
+    console.log('  Run \x1b[33mnpx trimwares deactivate\x1b[0m again if you meant to remove that one too.\n');
+    process.exit(0);
+  }
 
   console.log('\n  \x1b[32m✓ License removed from this machine\x1b[0m');
   console.log('  Re-activate any time with \x1b[33mnpx trimwares login --key YOUR_KEY\x1b[0m');
@@ -463,17 +490,23 @@ if (command === 'add') {
     } catch { /* ignore */ }
   }
 
-  const registry = await loadProjectRegistry();
-  const alreadyAdded = registry.find(p => p.path === targetPath);
+  // Check-then-append must happen inside one locked section. Reading the
+  // registry here and writing it back afterwards is a lost update: eight
+  // concurrent `add` runs kept ONE entry, because each read the same N and
+  // wrote N+1 over the others.
+  const name = basename(targetPath);
+  let alreadyAdded = null;
+  _state.mutateRegistry(cur => {
+    alreadyAdded = cur.find(p => p.path === targetPath) ?? null;
+    if (alreadyAdded) return cur;
+    return [...cur, { path: targetPath, name, addedAt: Date.now(), providers, hasExistingData: hasData }];
+  });
+
   if (alreadyAdded) {
     console.log(`\n  \x1b[33m⚠  Already registered:\x1b[0m ${alreadyAdded.name} (${targetPath})`);
     console.log(`  \x1b[90mDocs: \x1b[36mtrimwares.com/trace\x1b[0m\n`);
     process.exit(0);
   }
-
-  const name = basename(targetPath);
-  registry.push({ path: targetPath, name, addedAt: Date.now(), providers, hasExistingData: hasData });
-  await saveProjectRegistry(registry);
 
   console.log(`\n  \x1b[32m✓ Project added:\x1b[0m ${name}`);
   console.log(`  \x1b[90mPath:\x1b[0m ${targetPath}`);
@@ -673,7 +706,7 @@ if (command === 'serve') {
   };
 
   const { createServer }                          = await import('http');
-  const { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, statSync, realpathSync } = await import('fs');
+  const { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, statSync, realpathSync, unlinkSync } = await import('fs');
   const { join, resolve, extname, basename, sep } = await import('path');
   const { homedir }                               = await import('os');
   const { fileURLToPath }                         = await import('url');
@@ -694,17 +727,20 @@ if (command === 'serve') {
 
   // ── project registry (sync wrappers for serve context) ───────────────────────
 
-  const REGISTRY_PATH = join(homedir(), '.trimwares', 'projects.json');
-
-  function readProjectRegistry() {
-    if (!existsSync(REGISTRY_PATH)) return [];
-    try { return JSON.parse(readFileSync(REGISTRY_PATH, 'utf8')); } catch { return []; }
-  }
-
-  function writeProjectRegistry(reg) {
-    mkdirSync(join(homedir(), '.trimwares'), { recursive: true });
-    writeFileSync(REGISTRY_PATH, JSON.stringify(reg, null, 2));
-  }
+  // Sync twin of the module-level writeFileAtomic. `serve` writes shared state
+  // while other Trace processes may be doing the same, and a plain
+  // writeFileSync truncates the destination before writing a byte — so a
+  // process killed in that gap leaves an empty file. That is how a live
+  // config.json reached 0 bytes. Same fix here: sibling temp, fsync, rename.
+  // The registry is shared with every other Trace process, so reads and
+  // writes go through the locked module rather than a local helper. A private
+  // atomic writer here would still have lost updates — each process reads N,
+  // appends one, writes N+1, last writer wins. Measured: 1 of 8 concurrent
+  // appends survived. On Windows it also hit EPERM, because NTFS refuses a
+  // rename over a file another process has open.
+  const REGISTRY_PATH = _state.registryPath();
+  const readProjectRegistry = () => _state.readRegistry();
+  const mutateProjectRegistry = (fn) => _state.mutateRegistry(fn);
 
   const LLM_DEPS = ['openai', '@anthropic-ai/sdk', '@google/generative-ai', 'groq-sdk',
     'langchain', '@langchain/openai', 'ollama', 'cohere-ai', 'mistralai', '@trimwares/trace'];
@@ -1256,12 +1292,14 @@ if (command === 'serve') {
         try {
           const { path: rawPath, name: rawName } = JSON.parse(body);
           const abs  = resolve(rawPath);
-          const reg  = readProjectRegistry();
-          if (!reg.find(p => p.path === abs)) {
+          // Read and write inside one locked section: checking for the entry
+          // and then adding it as two separate steps is how a concurrent add
+          // gets dropped.
+          const reg = mutateProjectRegistry(cur => {
+            if (cur.find(p => p.path === abs)) return cur;
             const det = detectLLMProjectSync(abs);
-            reg.push({ path: abs, name: rawName || basename(abs), addedAt: Date.now(), providers: det.providers, hasExistingData: det.hasExistingData });
-            writeProjectRegistry(reg);
-          }
+            return [...cur, { path: abs, name: rawName || basename(abs), addedAt: Date.now(), providers: det.providers, hasExistingData: det.hasExistingData }];
+          });
           const project = reg.find(p => p.path === abs);
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(JSON.stringify({ ok: true, project }));
@@ -1276,7 +1314,7 @@ if (command === 'serve') {
         try {
           const { path: rawPath } = JSON.parse(body);
           const abs = resolve(rawPath);
-          writeProjectRegistry(readProjectRegistry().filter(p => p.path !== abs));
+          mutateProjectRegistry(cur => cur.filter(p => p.path !== abs));
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(JSON.stringify({ ok: true }));
         } catch { res.writeHead(400); res.end('Bad request'); }
@@ -1614,14 +1652,16 @@ if (command === 'serve') {
     // entry pointing at a temp folder that no longer exists. That happened:
     // 28 of 33 registered "projects" on the maintainer's machine were gate
     // and e2e scratch dirs.
-    const reg = readProjectRegistry();
     const cwd = process.cwd();
-    if (!process.env.TRIMWARES_NO_AUTO_REGISTER && !reg.some(p => p.path === cwd)) {
-      const det = detectLLMProjectSync(cwd);
-      if (det.compatible || det.hasExistingData) {
-        reg.push({ path: cwd, name: basename(cwd), addedAt: Date.now(), providers: det.providers, hasExistingData: det.hasExistingData });
-        writeProjectRegistry(reg);
-      }
+    if (!process.env.TRIMWARES_NO_AUTO_REGISTER) {
+      // Two `serve` processes starting together both auto-register; doing the
+      // check and the append in one locked section keeps both entries.
+      mutateProjectRegistry(cur => {
+        if (cur.some(p => p.path === cwd)) return cur;
+        const det = detectLLMProjectSync(cwd);
+        if (!(det.compatible || det.hasExistingData)) return cur;
+        return [...cur, { path: cwd, name: basename(cwd), addedAt: Date.now(), providers: det.providers, hasExistingData: det.hasExistingData }];
+      });
     }
 
     const tierLabel = isDeveloper ? `${license.tier} · expires ${expires}` : 'free · local only';

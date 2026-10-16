@@ -126,7 +126,11 @@ function wrapOpenAICompatible<T extends object>(
 
                 if (isStreaming) {
                   const streamStart = Date.now();
-                  const cacheHit    = engine.responseCache.get(request);
+                  // Gated: this streaming path reads the cache directly instead
+                  // of going through engine.interceptStream(), so it needs the
+                  // same check — otherwise `response: { enabled: false }` is
+                  // honoured for non-streaming calls and ignored for streams.
+                  const cacheHit    = engine.responseCacheEnabled() ? engine.responseCache.get(request) : null;
                   if (cacheHit) {
                     // Record cache hit BEFORE returning fake stream
                     recordStreamingCacheHit(engine, request, cacheHit, streamStart);
@@ -186,7 +190,8 @@ function wrapAnthropic<T extends object>(client: T, config?: TrimmerConfig): Wra
 
             if (isStreaming) {
               const streamStart = Date.now();
-              const cacheHit    = engine.responseCache.get(request);
+              // Same gate as the OpenAI-compatible streaming path above.
+              const cacheHit    = engine.responseCacheEnabled() ? engine.responseCache.get(request) : null;
               if (cacheHit) {
                 recordStreamingCacheHit(engine, request, cacheHit, streamStart);
                 return buildFakeAnthropicStream(extractCachedContent(cacheHit), cacheHit);
@@ -453,7 +458,10 @@ async function* wrapOpenAIStream(
         requestId, latencyMs,
         _rawResponse: { choices: [{ message: { content: fullContent } }] },
       };
-      engine.responseCache.set(request, responseForCache as unknown as import('./types/index.js').LLMResponse);
+      // Writes are gated with the reads, so a disabled cache stays empty.
+      if (engine.responseCacheEnabled()) {
+        engine.responseCache.set(request, responseForCache as unknown as import('./types/index.js').LLMResponse);
+      }
     }
     const entry = engine.costEngine.record({ requestId, provider: engine.provider, model, inputTokens, outputTokens, cached: false, cacheType: 'none', latencyMs, request, savings: 0, nativeCachedTokens: cachedPromptTokens });
     engine.sessionLog.write({
@@ -543,7 +551,10 @@ async function* wrapAnthropicStream(
         requestId, latencyMs,
         _rawResponse: { content: [{ type: 'text', text: fullContent }] },
       };
-      engine.responseCache.set(request, responseForCache as unknown as import('./types/index.js').LLMResponse);
+      // Writes are gated with the reads, so a disabled cache stays empty.
+      if (engine.responseCacheEnabled()) {
+        engine.responseCache.set(request, responseForCache as unknown as import('./types/index.js').LLMResponse);
+      }
     }
     const entry = engine.costEngine.record({ requestId, provider: engine.provider, model, inputTokens: effectiveInput, outputTokens, cached: false, cacheType: 'none', latencyMs, request, savings: 0, nativeCachedTokens: cacheReadTokens });
     engine.sessionLog.write({
@@ -560,13 +571,49 @@ async function* wrapAnthropicStream(
 
 // ─── Denormalizers: our optimized LLMRequest → back to SDK format ─────────────
 
+/**
+ * Selects the caller's ORIGINAL tool objects by name, rather than rebuilding
+ * them from our normalized `{name, description, parameters}` shape.
+ *
+ * Rebuilding dropped every field we do not model. `strict: true` was the one
+ * that mattered — it changes how the provider constrains output — but the same
+ * applied to Anthropic's `cache_control` and to anything either provider adds
+ * in future. A request we only meant to observe came back altered, which is
+ * the opposite of what the README's observe-only block promises.
+ *
+ * Unconditional on purpose: even with tool filtering ON, the tools we keep
+ * should be the caller's own objects, not copies missing their fields.
+ *
+ * Returns null when the originals cannot be matched one-for-one (an unexpected
+ * SDK shape), so the caller can fall back rather than silently drop tools.
+ */
+function preserveTools(
+  originalTools: unknown,
+  keptNames: string[],
+  nameOf: (tool: Record<string, unknown>) => string | undefined,
+): Array<Record<string, unknown>> | null {
+  if (!Array.isArray(originalTools)) return null;
+  const wanted = new Set(keptNames);
+  const preserved = (originalTools as Array<Record<string, unknown>>).filter(t => {
+    if (!t || typeof t !== 'object') return false;
+    const n = nameOf(t);
+    return typeof n === 'string' && wanted.has(n);
+  });
+  return preserved.length === wanted.size ? preserved : null;
+}
+
 function denormalizeOpenAIParams(original: Record<string, unknown>, optimized: LLMRequest): Record<string, unknown> {
   const result: Record<string, unknown> = { ...original, messages: optimized.messages };
   if (optimized.model)        result['model']       = optimized.model;
   if (optimized.maxTokens)    result['max_tokens']   = optimized.maxTokens;
   if (optimized.temperature !== undefined) result['temperature'] = optimized.temperature;
   if (optimized.tools && optimized.tools.length > 0) {
-    result['tools'] = optimized.tools.map(t => ({
+    const preserved = preserveTools(
+      original['tools'],
+      optimized.tools.map(t => t.name),
+      t => (t['function'] as { name?: string } | undefined)?.name,
+    );
+    result['tools'] = preserved ?? optimized.tools.map(t => ({
       type: 'function',
       function: { name: t.name, description: t.description, parameters: t.parameters },
     }));
@@ -587,7 +634,20 @@ function denormalizeAnthropicParams(
   // (when intercept() spread cacheOpt into it). Check for pre-computed blocks first.
   const precomputedBlocks = (optimized as unknown as Record<string, unknown>)['anthropicSystemBlocks'] as import('./types/index.js').AnthropicSystemBlock[] | undefined;
 
-  if (precomputedBlocks && precomputedBlocks.length > 0) {
+  if (!engine.nativePromptCachingEnabled()) {
+    // Passive mode: hand the caller's own `system` back untouched, markers and
+    // all. Every other branch below rewrites it into cache_control blocks —
+    // including the precomputed path — so an observe-only configuration has to
+    // short-circuit here or it is not observe-only. If `system` lived in
+    // `messages` instead, collapse it the way Anthropic requires and no more.
+    if (original['system'] !== undefined) {
+      result['system'] = original['system'];
+    } else {
+      const systemMsgs = optimized.messages.filter(m => m.role === 'system');
+      if (systemMsgs.length > 0) result['system'] = systemMsgs.map(m => m.content).join('\n\n');
+      else delete result['system'];
+    }
+  } else if (precomputedBlocks && precomputedBlocks.length > 0) {
     // System was already extracted and cache_control applied — use as-is
     result['system'] = precomputedBlocks;
   } else {
@@ -612,7 +672,15 @@ function denormalizeAnthropicParams(
   if (optimized.model) result['model'] = optimized.model;
 
   if (optimized.tools && optimized.tools.length > 0) {
-    result['tools'] = optimized.tools.map(t => ({
+    // Anthropic tools carry `cache_control` directly on the tool object, so
+    // rebuilding them here stripped the caller's own prompt-cache markers —
+    // while we were separately adding our own further up. Preserve theirs.
+    const preserved = preserveTools(
+      original['tools'],
+      optimized.tools.map(t => t.name),
+      t => t['name'] as string | undefined,
+    );
+    result['tools'] = preserved ?? optimized.tools.map(t => ({
       name: t.name, description: t.description, input_schema: t.parameters,
     }));
   }

@@ -1,5 +1,151 @@
 # Changelog
 
+## [1.5.6] — 2026-10-15
+
+### Fixed — your activation could be destroyed by an interrupted write
+
+`~/.trimwares/config.json` holds this device's activation. It was written with
+a bare `writeFileSync`, which opens the file with `'w'` — **truncating it to
+zero bytes before writing anything**. Any process death inside that window
+leaves an empty file, and an empty config read exactly like "never activated":
+you would be told to buy a licence you already own, with no sign that anything
+had been lost.
+
+The window is reachable in normal use. `serve` fires an unawaited background
+token refresh when your activation is within 7 days of renewal, so a Ctrl+C, a
+crash, or a machine sleeping at the wrong moment could land in it.
+
+This is a demonstrated failure **mechanism** — reproduced in
+`tests/integration/stateDurability.test.ts`, which interrupts a real write and
+shows the file at 0 bytes. It is **not** established as the cause of any
+particular incident; a timestamp identifies a window, not a responsible
+process. Both are stated separately on purpose.
+
+Three distinct problems, each needing its own fix:
+
+- **Partial writes.** Every write to `config.json`, `machine-id` and
+  `projects.json` now goes to a sibling temp file, is flushed to disk, and is
+  renamed over the target. A reader sees either the whole old file or the whole
+  new one, and an interrupted write leaves the original intact. On Windows the
+  rename also retries briefly: NTFS returns `EPERM` if anything else — an
+  antivirus scanner, the search indexer — holds the destination open.
+- **Lost updates.** Atomic replacement alone does not fix this. Two processes
+  each read the registry, append one entry, and write it back; the second
+  overwrites the first. Measured: **eight concurrent `trimwares add` runs kept
+  one entry.** Read-modify-write now happens under a cross-process lock, and
+  the same eight runs keep all eight.
+- **Stale overwrites.** The background refresh compared the stored token before
+  writing, but outside any lock — so a `login` or `deactivate` that committed
+  in between was silently overwritten, and a logged-out token could come back.
+  The comparison now happens inside the lock. Network calls stay outside it, so
+  no Trace command ever blocks on another one's HTTP timeout.
+
+Also:
+
+- **Missing, empty, corrupt and unreadable configs are now distinguished**, each
+  with an accurate message. The empty case says the activation was lost, that
+  your licence itself is unaffected, and how to restore it — and no longer
+  suggests upgrading.
+- **A blank `machine-id` is reported rather than silently replaced.**
+  Regenerating one does not recover the old identity, and the licence server
+  sees a new device, so re-activating may consume another of your three slots.
+  You are now told that, instead of it happening quietly.
+- **Release tests can no longer touch your own state.** The release gate ran
+  against your real `~/.trimwares`, so it could modify the project registry —
+  and, on the Developer package, damage a live activation. It now runs against
+  a disposable state directory with its own machine identity, and **asserts
+  afterwards that your real state is byte-for-byte unchanged**.
+
+
+### Corrections to 1.5.5
+
+**1.5.5 said Groq has no prompt cache. That was wrong.** Groq caches
+automatically — no code change, no extra fee — at **50% off cached input**, with
+a minimum cacheable prefix of 128–1024 tokens depending on the model, reported
+in the same `usage.prompt_tokens_details.cached_tokens` field OpenAI uses. It is
+currently limited to the GPT-OSS family ([Groq's
+docs](https://console.groq.com/docs/prompt-caching)). The practical effect of
+our error was that `analyze` would not credit or recommend prefix caching on
+those models. Trace's capture path already read the field for every
+OpenAI-compatible provider, so cache hits were recorded correctly throughout.
+
+**Groq's GPT-OSS models were priced as GPT-4o.** They were missing from the
+pricing table, and unknown models fall back to GPT-4o's $2.50/$10.00 per
+million. Against `gpt-oss-20b`'s real $0.075/$0.30 that overstated spend by
+**33.3×** — and because the factor is identical on input and output, every
+*percentage* in the report still looked right while the dollars did not. Now
+priced from Groq's published rates, cached rates included:
+
+| Model | Input | Cached input | Output |
+|---|---|---|---|
+| `gpt-oss-20b` | $0.075 | $0.037 | $0.30 |
+| `gpt-oss-120b` | $0.15 | $0.075 | $0.60 |
+| `gpt-oss-safeguard-20b` | $0.075 | $0.037 | $0.30 |
+
+**Unknown-model pricing no longer passes itself off as real.** The GPT-4o
+fallback is still there — a number is better than a crash — but it is now
+marked `estimated` and the model names are recorded, so anything showing a
+dollar figure can say it is a guess. Previously the fallback was silent, which
+is how a 33× overstatement read as a normal report.
+
+### Fixed — observe-only did not mean observe-only
+
+The README's observe-only configuration promised your requests reach the
+provider unchanged. Three ways that was false:
+
+- **OpenAI tool definitions were rebuilt, not forwarded.** We reconstructed each
+  tool from the three fields we model internally, so everything else was
+  dropped — including **`strict: true`**, which changes how the provider
+  constrains output. Your tools are now passed through as the exact objects you
+  supplied. This also applies with tool filtering *on*: the subset we keep is
+  your own objects, not copies.
+- **Anthropic tool definitions lost their `cache_control`.** Same cause. If you
+  place your own cache markers, they survive now.
+- **Anthropic system prompts were rewritten.** Trace injected its own
+  `cache_control` blocks unconditionally. New
+  **`optimization.nativePromptCaching`** (default `true`, so nothing changes
+  unless you ask) turns that off, and the observe-only block in the README now
+  includes it. Anthropic-only — OpenAI and Groq cache server-side with nothing
+  to inject.
+
+### Fixed — `cache.plan.enabled: false` only half worked
+
+It stopped plans being *read* but not *stored*, so a disabled plan cache still
+filled up and re-enabling it later served plans captured while it was off. It
+now means no reuse and no storage, matching `cache.response.enabled`.
+
+### Tests
+
+Two of the suites backing the above could not have failed:
+
+- The observe-only test asserted only the *number* of tools in the outgoing
+  request, never their contents — and its fixtures carried no `strict`, so the
+  bug above sailed through it.
+- The "disabled cache writes nothing" test made its second call through a *new*
+  wrapper. Every wrapper builds its own engine with its own cache, so a fresh
+  instance misses whether or not writes are gated.
+
+Both now assert on the thing in question — deep equality on the exact request
+body, and the entry count of the same cache instance — and both carry a control
+case that fails if the behaviour being suppressed was never happening, so
+neither can pass for the wrong reason. Added
+`tests/integration/requestPreservation.test.ts`.
+
+A third was worse: the first "concurrent writers" test for the durability work
+above used `Promise.all` over `execFileSync`, **which blocks** — the child
+processes ran strictly one after another (measured: 342, 681, 1020 ms), so it
+asserted nothing about concurrency at all and passed against code that loses
+seven of eight entries. The replacements spawn real processes parked on a
+barrier, read the file continuously while writes are in flight, interrupt a
+write mid-flight, and include a control that fails if the lock ever stops being
+load-bearing. State handling moved into `src/state/UserState.ts` specifically so
+it could be tested this way without a licence server.
+
+Two defects in this release were found by those tests rather than by review: the
+lock's original backoff was a busy-spin that starved waiters under load, and
+`trimwares add` still read the registry outside the lock after the atomic write
+was already in place.
+
 ## [1.5.5] — 2026-10-07
 
 ### Fixed — OpenAI prompt caching was never recorded

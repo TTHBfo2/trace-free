@@ -157,6 +157,17 @@ export interface ModelPricing {
   inputPerMillion: number;
   outputPerMillion: number;
   cachedInputPerMillion?: number;
+  /**
+   * True when this is NOT the model's real published rate — it is the
+   * unknown-model fallback, and every cost derived from it is a guess.
+   *
+   * This exists because the fallback was invisible. A Groq `gpt-oss-20b`
+   * session was priced at GPT-4o's $2.50/$10.00 against its real
+   * $0.075/$0.30, overstating spend by 33x, and nothing in the report said
+   * so — the percentages all looked right. Anything that shows a dollar
+   * figure must say when it rests on this.
+   */
+  estimated?: boolean;
 }
 
 export interface ProviderCostSummary {
@@ -340,6 +351,21 @@ export interface TrimmerConfig {
      * Default: true
      */
     filterToolSchemas?: boolean;
+    /**
+     * Inject provider-native prompt-cache markers (Anthropic `cache_control`)
+     * onto stable system-prompt and tool prefixes.
+     *
+     * This MODIFIES the request that reaches the provider. It is usually what
+     * you want — it is where the 90% discount on cached prefixes comes from —
+     * but it means Trace is not a passive observer by default. Set it to false
+     * for genuine measure-only use, or if you place your own `cache_control`
+     * markers and want them left exactly as written.
+     *
+     * Anthropic-only; no other provider's requests are modified for caching
+     * (OpenAI and Groq both cache automatically, server-side, with no markers).
+     * Default: true
+     */
+    nativePromptCaching?: boolean;
   };
   pricing?: Partial<Record<string, ModelPricing>>;
   /**

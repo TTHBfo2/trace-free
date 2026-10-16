@@ -300,9 +300,9 @@ Zero-config by default. All optimizations run with conservative settings out of 
 const openai = trimwares.openai(new OpenAI(), {
   labels: { project: 'my-app', environment: 'production' },  // group requests in dashboard
   cache: {
-    response: { ttlMs: 5 * 60 * 1000 },  // response cache TTL (default: 5 min)
+    response: { enabled: true,  ttlMs: 5 * 60 * 1000 },  // ON by default — TTL 5 min
     semantic:  { enabled: false, similarityThreshold: 0.97 }, // off by default — enable for FAQ/support bots
-    plan:      { enabled: false },         // agent plan cache
+    plan:      { enabled: true },  // ON by default, but only used via getPlan()/storePlan()
   },
   optimization: {
     routeToCheapestModel: false,  // opt-in — you chose your model for a reason
@@ -311,6 +311,40 @@ const openai = trimwares.openai(new OpenAI(), {
   },
 });
 ```
+
+### Observe only — measure without changing anything
+
+Trace is not a passive logger by default: response caching, tool-schema
+filtering and Anthropic prompt-cache injection are all on, and all three change
+what reaches the provider. If you want measurement with no behavioural change,
+turn them off explicitly:
+
+```ts
+const openai = trimwares.openai(new OpenAI(), {
+  cache: { response: { enabled: false } },
+  optimization: {
+    filterToolSchemas:   false,  // send every tool you passed
+    nativePromptCaching: false,  // Anthropic: add no cache_control of ours
+  },
+});
+```
+
+With that config every request reaches the provider, nothing is served from
+cache, your tool definitions are forwarded as the exact objects you passed —
+`strict`, `cache_control` and any other field intact — and on Anthropic your
+`system` prompt is sent as you wrote it.
+
+`nativePromptCaching` only affects Anthropic, which is the one provider where
+Trace adds cache markers to your request. OpenAI and Groq both cache
+automatically server-side, so there is nothing to inject and nothing to turn
+off.
+
+Two suites hold this down: `tests/integration/cacheDisableFlags.test.ts`
+asserts on the number of calls the provider actually received and on the cache's
+own entry count, and `tests/integration/requestPreservation.test.ts` asserts
+deep equality on the exact request body the provider was handed. Both include a
+control case that fails if the thing being suppressed was never happening — so
+neither can pass by accident.
 
 **Semantic cache note:** Uses `all-MiniLM-L6-v2` local embeddings via the optional peer package `@huggingface/transformers` (~23 MB model, downloaded once). This is **not** installed by `npm install @trimwares/trace` — the default install has no production audit findings. Semantic embeddings are an optional extra dependency: to enable semantic caching, run `npm install @huggingface/transformers` yourself, then set `cache.semantic.enabled: true`. Without it, semantic caching silently falls back to a lighter trigram-similarity match instead of erroring. Disabled by default anyway because stress testing showed false positives on structurally similar but semantically different queries (e.g. "capital of France?" matching "capital of Germany?") — enable only for workloads with near-identical repeated queries.
 

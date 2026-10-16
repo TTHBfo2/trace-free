@@ -75,11 +75,13 @@ export class LLMCostTrimmer {
       provider:     config.provider     ?? provider.name,
       defaultModel: config.defaultModel ?? provider.defaultModel,
       cache: {
-        response: { enabled: true,  ttlMs: responseCfg.ttlMs  ?? 5  * 60 * 1000, maxEntries: responseCfg.maxEntries ?? 2_000 },
-        semantic: { enabled: false, ttlMs: semanticCfg.ttlMs  ?? 10 * 60 * 1000, maxEntries: semanticCfg.maxEntries ?? 500,
+        // `enabled` comes from the caller — these were literals, which meant
+        // `cache: { response: { enabled: false } }` was silently ignored.
+        response: { enabled: responseCfg.enabled ?? true,  ttlMs: responseCfg.ttlMs  ?? 5  * 60 * 1000, maxEntries: responseCfg.maxEntries ?? 2_000 },
+        semantic: { enabled: semanticCfg.enabled ?? false, ttlMs: semanticCfg.ttlMs  ?? 10 * 60 * 1000, maxEntries: semanticCfg.maxEntries ?? 500,
                     similarityThreshold: (semanticCfg as { similarityThreshold?: number }).similarityThreshold ?? 0.97 },
         // Heuristic cache disabled by default — stress test confirmed false positives at 0.97.
-        plan:     { enabled: true,  ttlMs: planCfg.ttlMs      ?? 30 * 60 * 1000, maxEntries: planCfg.maxEntries     ?? 200 },
+        plan:     { enabled: planCfg.enabled ?? true,  ttlMs: planCfg.ttlMs      ?? 30 * 60 * 1000, maxEntries: planCfg.maxEntries     ?? 200 },
       },
       optimization: {
         compressPrompts:      config.optimization?.compressPrompts      ?? false,
@@ -198,8 +200,11 @@ export class LLMCostTrimmer {
     response.provider     = resolvedProvider;
     response.usage.cachedTokens = nativeCachedTokens;
 
-    // 7. Store in caches
-    this.responseCache.set(request, response);
+    // 7. Store in caches — the read at step 1 is gated on the same flag, so the
+    // write has to be too; otherwise a disabled cache still fills up.
+    if ((this.config.cache.response as { enabled?: boolean }).enabled !== false) {
+      this.responseCache.set(request, response);
+    }
     if (this.config.cache.semantic?.enabled) {
       void this.semanticCache.set(request, response);
     }
@@ -231,8 +236,16 @@ export class LLMCostTrimmer {
 
   // ─── Agentic Plan Cache ────────────────────────────────────────────────────
 
+  // `cache.plan.enabled: false` means no reuse AND no storage — the same
+  // contract as `cache.response.enabled`. It used to gate only this read, so
+  // recordPlan below kept filling a cache nobody could read, and re-enabling
+  // later replayed plans captured while the feature was supposedly off.
+  private planCacheEnabled(): boolean {
+    return (this.config.cache.plan as { enabled?: boolean }).enabled !== false;
+  }
+
   getPlan(taskDescription: string): AgentPlan | null {
-    if ((this.config.cache.plan as { enabled?: boolean }).enabled === false) return null;
+    if (!this.planCacheEnabled()) return null;
     return this.planCache.getPlan(taskDescription);
   }
 
@@ -244,6 +257,7 @@ export class LLMCostTrimmer {
       model:            params.model ?? this.config.defaultModel,
       inputTokensUsed:  params.inputTokensUsed,
       outputTokensUsed: params.outputTokensUsed,
+      persist:          this.planCacheEnabled(),
     });
   }
 

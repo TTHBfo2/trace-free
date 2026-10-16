@@ -70,20 +70,25 @@ export class TrimwareEngine {
       provider,
       defaultModel: config.defaultModel ?? '',
       cache: {
-        response: { enabled: true, ttlMs: rc.ttlMs ?? 5 * 60_000, maxEntries: rc.maxEntries ?? 2_000 },
+        // `enabled` is read from the caller, not hardcoded. It used to be a
+        // literal here, which silently dropped `cache: { response: { enabled:
+        // false } }` — callers asking for observe-only tracking still had their
+        // repeated requests served from cache and never reached the provider.
+        response: { enabled: rc.enabled ?? true, ttlMs: rc.ttlMs ?? 5 * 60_000, maxEntries: rc.maxEntries ?? 2_000 },
         // Heuristic cache DISABLED by default after stress testing confirmed false positives.
         // Trigram similarity matches same-structure/different-entity questions at any threshold.
         // E.g. "Does TechFlow integrate with GitHub?" matches "Does TechFlow integrate with Jira?"
         // Safe to enable ONLY for near-identical text (copy-paste paraphrases).
         // True semantic caching (all-MiniLM-L6-v2 local embeddings) is planned for v0.2.
-        semantic: { enabled: false, ttlMs: sc.ttlMs ?? 10 * 60_000, maxEntries: sc.maxEntries ?? 500, similarityThreshold: (sc as { similarityThreshold?: number }).similarityThreshold ?? 0.97 },
-        plan:     { enabled: true, ttlMs: pc.ttlMs ?? 30 * 60_000, maxEntries: pc.maxEntries ?? 200 },
+        semantic: { enabled: sc.enabled ?? false, ttlMs: sc.ttlMs ?? 10 * 60_000, maxEntries: sc.maxEntries ?? 500, similarityThreshold: (sc as { similarityThreshold?: number }).similarityThreshold ?? 0.97 },
+        plan:     { enabled: pc.enabled ?? true, ttlMs: pc.ttlMs ?? 30 * 60_000, maxEntries: pc.maxEntries ?? 200 },
       },
       optimization: {
         compressPrompts:      false,
         pruneContext:         config.optimization?.pruneContext          ?? false,
         routeToCheapestModel: config.optimization?.routeToCheapestModel ?? false, // opt-in only
         filterToolSchemas:    (config.optimization as { filterToolSchemas?: boolean })?.filterToolSchemas ?? true,
+        nativePromptCaching:  (config.optimization as { nativePromptCaching?: boolean })?.nativePromptCaching ?? true,
       },
       pricing: config.pricing ?? {},
       labels:  config.labels  ?? {},
@@ -141,8 +146,9 @@ export class TrimwareEngine {
     const requestId = generateRequestId();
     const startMs   = Date.now();
 
-    // 1. Response cache check
-    const cacheHit = this.responseCache.get(request);
+    // 1. Response cache check — skipped entirely when the caller disabled it,
+    // so an observe-only config never short-circuits a provider call.
+    const cacheHit = this.responseCacheEnabled() ? this.responseCache.get(request) : null;
     if (cacheHit) {
       const latencyMs = Date.now() - startMs;
       // The prompt this hit avoided sending is the WHOLE original prompt:
@@ -238,7 +244,11 @@ export class TrimwareEngine {
     // 9. Store in caches (only if not streaming — streaming responses are cached post-completion)
     if (!isStreaming) {
       const cacheEntry = buildCacheEntry(rawResponse, resolvedModel, this.provider, requestId, latencyMs, cost, usage);
-      this.responseCache.set(request, cacheEntry as unknown as import('../types/index.js').LLMResponse);
+      // Writes are gated too, not just reads — a disabled cache that still
+      // filled up would start serving hits the moment it was re-enabled.
+      if (this.responseCacheEnabled()) {
+        this.responseCache.set(request, cacheEntry as unknown as import('../types/index.js').LLMResponse);
+      }
       if (this.config.cache.semantic?.enabled) {
         await this.semanticCache.set(request, cacheEntry as unknown as import('../types/index.js').LLMResponse);
       }
@@ -287,6 +297,22 @@ export class TrimwareEngine {
     return { ...optimized, model: resolvedModel };
   }
 
+  // Single source of truth for "is the response cache on". Used by both paths
+  // here, by the write site, and by the provider proxies in trimwares.ts, which
+  // reach into `engine.responseCache` directly on their streaming paths — hence
+  // public. Defaults to on when unset; only an explicit `false` disables it.
+  responseCacheEnabled(): boolean {
+    return (this.config.cache.response as { enabled?: boolean }).enabled !== false;
+  }
+
+  // Whether we may add Anthropic `cache_control` markers to the caller's
+  // system prompt and tools. Public for the same reason as the above: the
+  // Anthropic denormalizer in trimwares.ts is the site that would modify the
+  // request. Defaults to on; only an explicit `false` makes us passive.
+  nativePromptCachingEnabled(): boolean {
+    return (this.config.optimization as { nativePromptCaching?: boolean }).nativePromptCaching !== false;
+  }
+
   // ─── Streaming intercept ──────────────────────────────────────────────────
 
   async interceptStream(
@@ -294,7 +320,7 @@ export class TrimwareEngine {
     callFn: (optimizedRequest: LLMRequest) => Promise<RawSdkResult>,
   ): Promise<RawSdkResult> {
     // For streaming: check cache first — if hit, caller handles the fake stream
-    const cacheHit = this.responseCache.get(request);
+    const cacheHit = this.responseCacheEnabled() ? this.responseCache.get(request) : null;
     if (cacheHit) {
       return (cacheHit as unknown as { _rawResponse: RawSdkResult })._rawResponse;
     }
@@ -386,8 +412,14 @@ function extractUsage(raw: RawSdkResult, request: LLMRequest, engine: TrimwareEn
   // their spend. Measured 2026-09-28: a 4,901-token prompt came back with 4,736
   // cached tokens, ~97% of the prompt, and Trace recorded none of it.
   //
-  // Groq shares this branch and has no prompt cache, so it never sends the
-  // field; the ?? 0 covers that without needing to branch on provider.
+  // Groq shares this branch and reports the same field: it caches
+  // automatically on the GPT-OSS family (50% off cached input, minimum prefix
+  // 128–1024 tokens by model) and surfaces it as
+  // `usage.prompt_tokens_details.cached_tokens`, exactly like OpenAI. Its
+  // Llama and Mixtral models do not cache and simply omit the field, which the
+  // `?? 0` covers — so this needs no provider branch either way. An earlier
+  // comment here, and a changelog entry, claimed Groq had no prompt cache at
+  // all. That was wrong; see https://console.groq.com/docs/prompt-caching.
   // CAREFUL — the two providers scope these differently, and conflating them
   // double-bills. OpenAI's `prompt_tokens` is the TOTAL prompt and
   // `cached_tokens` is a SUBSET of it. Anthropic's `input_tokens` EXCLUDES

@@ -121,9 +121,8 @@ export function renderReport(options: AnalyzeOptions): string {
     // Count only requests the provider actually discounted. This used to read
     // e.nativeCache when that flag held a pre-call eligibility guess, so the
     // CLI reported "100% of requests had provider cache applied" for prompts
-    // that were merely large enough to be cacheable — including on Groq, which
-    // has no prompt cache at all. The dashboard aggregate was fixed in
-    // bin/trimwares.js; this call site was missed.
+    // that were merely large enough to be cacheable. The dashboard aggregate
+    // was fixed in bin/trimwares.js; this call site was missed.
     if ((e.nativeCachedTokens ?? 0) > 0) nativeCacheRequests++;
 
     // Evidence for the recommendations further down. A locally-cached hit is
@@ -132,9 +131,15 @@ export function renderReport(options: AnalyzeOptions): string {
     // caching" to the extent it was NOT already discounted, so accumulate spend
     // on requests that reached the provider and got no cache discount — plus
     // the saving THIS model's own cached rate would give on it. A model with no
-    // cached rate (Groq, gpt-3.5-turbo) contributes spend but zero saving,
-    // which is the honest answer: caching it saves nothing. Previously every
-    // category was quoted at a flat 90%, Anthropic's rate, for every provider.
+    // cached rate (gpt-3.5-turbo, Groq's Llama and Mixtral models) contributes
+    // spend but zero saving, which is the honest answer: caching it saves
+    // nothing. Previously every category was quoted at a flat 90%, Anthropic's
+    // rate, for every provider.
+    //
+    // Per-model, never per-provider: Groq DOES have a prompt cache on its
+    // GPT-OSS family (automatic, 50% off cached input) while its Llama and
+    // Mixtral models have none. Reading the rate off the model is what makes
+    // both cases come out right.
     const mp = costEngine.getPricing(e.model);
     const modelDiscount = mp.cachedInputPerMillion !== undefined && mp.inputPerMillion > 0
       ? 1 - mp.cachedInputPerMillion / mp.inputPerMillion

@@ -51,8 +51,17 @@ export class AgentPlanCache {
     inputTokensUsed: number;
     outputTokensUsed: number;
     tools?: Array<{ name: string }>;
+    /**
+     * False builds and returns the plan without retaining it, so a caller who
+     * set `cache.plan.enabled: false` gets their plan object back and nothing
+     * accumulates. Previously only the READ was gated, so a "disabled" plan
+     * cache still filled up and a later enabled instance would serve plans it
+     * was never supposed to have. Default: true.
+     */
+    persist?: boolean;
   }): AgentPlan {
-    if (this.store.size >= this.maxEntries) this.evictLRU();
+    const persist = params.persist !== false;
+    if (persist && this.store.size >= this.maxEntries) this.evictLRU();
 
     const planId = generatePlanId();
     const taskHash = this.hashTask(params.taskDescription, params.tools?.map(t => t.name));
@@ -70,7 +79,7 @@ export class AgentPlanCache {
       estimatedTokensSaved,
     };
 
-    this.store.set(planId, plan);
+    if (persist) this.store.set(planId, plan);
     return plan;
   }
 

@@ -24,10 +24,12 @@
  */
 
 import { execSync, spawn } from 'child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync, existsSync, readFileSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync, existsSync, readFileSync, statSync } from 'fs';
 import { join, resolve } from 'path';
-import { tmpdir } from 'os';
+import { tmpdir, homedir } from 'os';
 import { createServer } from 'net';
+import { pathToFileURL } from 'url';
+import { randomUUID, createHash } from 'crypto';
 
 const ROOT = resolve(new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
 const pkg  = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
@@ -80,6 +82,61 @@ for (const [name, entry] of Object.entries(audit?.vulnerabilities ?? {})) {
   for (const a of (entry.via ?? []).filter(x => typeof x === 'object')) console.log(`  note ${entry.severity}: ${name} — ${a.title} (${a.url}; fixAvailable=${entry.fixAvailable})`);
 }
 
+// ── 2b. The INSTALLED SDK bundle honours cache.response.enabled:false ────────
+//
+// `dist/` is a built artifact, so every source-level test can pass against
+// TypeScript that was never compiled into what ships. The Developer package
+// shipped exactly that in 1.0.5: the source honoured this flag, the published
+// bundle predated the fix and silently de-duplicated requests a caller had
+// explicitly asked be left alone. No suite could see it, because none of them
+// import the artifact.
+//
+// So: import the bundle out of the install tree and count provider calls.
+// Cache on must de-duplicate; cache off must reach the provider every time.
+{
+  const installed = join(app, 'node_modules', '@trimwares', 'trace');
+  const entry = pathToFileURL(join(installed, 'dist', 'index.esm.js')).href;
+  // Keep the engine's session log inside the throwaway install, not the repo —
+  // and PUT IT BACK afterwards. Leaving it set made sections 3 and 4 seed one
+  // directory and read another, so /api/data came back empty and three later
+  // checks failed for a reason that had nothing to do with them.
+  const prevLogDir = process.env.TRIMWARES_LOG_DIR;
+  process.env.TRIMWARES_LOG_DIR = join(app, '.trimwares-gate-sdk');
+  const { trimwares } = await import(entry);
+
+  const REQ = {
+    model: 'gpt-4o-mini',
+    messages: [{ role: 'system', content: 'x'.repeat(20000) }, { role: 'user', content: 'identical question' }],
+  };
+  const counter = () => {
+    const s = { calls: 0 };
+    return { s, client: { chat: { completions: { create: async () => {
+      s.calls++;
+      return {
+        model: 'gpt-4o-mini',
+        choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 4902, completion_tokens: 30, total_tokens: 4932, prompt_tokens_details: { cached_tokens: 0 } },
+      };
+    } } } } };
+  };
+  const twice = async (cfg) => {
+    const { s, client } = counter();
+    const t = cfg ? trimwares.openai(client, cfg) : trimwares.openai(client);
+    await t.chat.completions.create(REQ);
+    await t.chat.completions.create(REQ);
+    await new Promise(r => setTimeout(r, 250));
+    return s.calls;
+  };
+
+  const onCalls  = await twice(null);
+  const offCalls = await twice({ cache: { response: { enabled: false } } });
+  check(onCalls === 1,  `installed bundle: cache on de-duplicates (${onCalls} provider call, want 1)`);
+  check(offCalls === 2, `installed bundle: cache.response.enabled:false reaches the provider every time (${offCalls} calls, want 2)`);
+
+  if (prevLogDir === undefined) delete process.env.TRIMWARES_LOG_DIR;
+  else process.env.TRIMWARES_LOG_DIR = prevLogDir;
+}
+
 // ── 3. Seed a tiny session so /api/data and /api/clear have something real ───
 mkdirSync(join(app, '.trimwares'));
 const entry = (i) => JSON.stringify({
@@ -96,13 +153,44 @@ writeFileSync(join(app, '.trimwares', 'session.jsonl'), [entry(1), entry(2), ent
 // ── 4. Serve from the INSTALLED package, exactly like `npx trimwares serve` ──
 const port = await freePort();
 const bin  = join(app, 'node_modules', '@trimwares', 'trace', 'bin', 'trimwares.js');
-// TRIMWARES_NO_AUTO_REGISTER: don't let this throwaway folder into the user's global project registry.
-const server = spawn(process.execPath, [bin, 'serve', '--port', String(port)], { cwd: app, stdio: 'pipe', env: { ...process.env, TRIMWARES_NO_AUTO_REGISTER: '1' } });
+
+// ── Isolation: this gate must never touch the developer's own state ──────────
+//
+// The gate used to run against the real user environment. A Developer gate run
+// doing that emptied a live config.json and cost an activation, so both gates
+// now get a disposable state directory and a distinct machine identity, and
+// assert afterwards that the real one is untouched.
+const gateHome = join(packDir, 'home');
+mkdirSync(join(gateHome, '.trimwares'), { recursive: true });
+writeFileSync(join(gateHome, '.trimwares', 'machine-id'), `gate-${randomUUID()}`, 'utf8');
+
+const realStateDir = join(homedir(), '.trimwares');
+const snapshotRealState = () => {
+  if (!existsSync(realStateDir)) return 'absent';
+  return readdirSync(realStateDir).sort().map(f => {
+    const full = join(realStateDir, f);
+    try {
+      if (statSync(full).isDirectory()) return `${f}:dir`;
+      return `${f}:${createHash('sha256').update(readFileSync(full)).digest('hex')}`;
+    } catch { return `${f}:unreadable`; }
+  }).join('|');
+};
+const realStateBefore = snapshotRealState();
+
+// TRIMWARES_NO_AUTO_REGISTER also stays: belt and braces, so even a bug in the
+// home-dir override cannot add this throwaway folder to a real registry.
+const gateEnv = { ...process.env, TRIMWARES_HOME_DIR: gateHome, TRIMWARES_NO_AUTO_REGISTER: '1' };
+const server = spawn(process.execPath, [bin, 'serve', '--port', String(port)], { cwd: app, stdio: 'pipe', env: gateEnv });
 let serverLog = ''; server.stdout.on('data', d => serverLog += d); server.stderr.on('data', d => serverLog += d);
 const base = `http://localhost:${port}`;
 const up = await waitFor(`${base}/api/data`);
 check(up, `serve started on :${port}`);
 
+// Everything from here to the finally block is wrapped, so an ordinary
+// exception mid-assertion cannot skip the teardown: leaving the server alive
+// strands a port, and skipping the state check means the run never proves it
+// left the developer's own ~/.trimwares alone.
+try {
 if (up) {
   // 4a. HTML shell: 200, html, must revalidate
   const html = await fetch(`${base}/`);
@@ -159,9 +247,19 @@ if (up) {
 }
 
 // ── 5. Teardown ──────────────────────────────────────────────────────────────
-server.kill();
-await new Promise(r => setTimeout(r, 500));
-try { rmSync(packDir, { recursive: true, force: true }); } catch {}
+} finally {
+  server.kill();
+  await new Promise(r => setTimeout(r, 500));
+
+  // The whole point of the isolation above: prove this run did not touch the
+  // developer's own licence, machine identity or project registry. The kill()
+  // just above is exactly the event that truncated a real config.json.
+  const after = snapshotRealState();
+  check(after === realStateBefore,
+    `the real ~/.trimwares is byte-for-byte unchanged by this gate run${after === realStateBefore ? '' : ' — ISOLATION BROKEN, a gate run just modified real user state'}`);
+
+  try { rmSync(packDir, { recursive: true, force: true }); } catch { /* temp dir may be locked on Windows */ }
+}
 
 if (failures) {
   console.error(`\nrelease-gate: ${failures} check(s) FAILED — do not publish.`);
