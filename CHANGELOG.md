@@ -88,6 +88,22 @@ marked `estimated` and the model names are recorded, so anything showing a
 dollar figure can say it is a guess. Previously the fallback was silent, which
 is how a 33× overstatement read as a normal report.
 
+### Fixed — `cache.response.enabled: false` did nothing in 1.5.5
+
+Verified against the package on npm: installing `@trimwares/trace@1.5.5` and
+setting `cache.response.enabled: false` still de-duplicates — two identical
+requests make one provider call instead of two. So anyone who set that flag to
+measure their app without changing its behaviour was still getting response
+caching, silently.
+
+The cause was in the resolved config, which read `response: { enabled: true, … }`
+— a hard-coded literal that discarded whatever the caller passed. The same
+applied to `cache.semantic.enabled`, which could not be switched on.
+
+The release gate now exercises this flag against the **installed tarball**
+rather than the TypeScript source, because a source-level test cannot see a
+build that lags its source.
+
 ### Fixed — observe-only did not mean observe-only
 
 The README's observe-only configuration promised your requests reach the
